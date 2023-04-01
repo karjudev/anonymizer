@@ -1,159 +1,12 @@
 import os
 import time
 
-import pandas as pd
 import torch
-from pytorch_lightning import seed_everything
-
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import LearningRateMonitor, EarlyStopping
+from lightning.pytorch import seed_everything, Trainer
+from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 
 from log import logger
 from model.ner_model import NERBaseAnnotator
-from utils.reader import CoNLLReader
-
-conll_iob = {
-    "B-ORG": 0,
-    "I-ORG": 1,
-    "B-MISC": 2,
-    "I-MISC": 3,
-    "B-LOC": 4,
-    "I-LOC": 5,
-    "B-PER": 6,
-    "I-PER": 7,
-    "O": 8,
-}
-wnut_iob = {
-    "B-CORP": 0,
-    "I-CORP": 1,
-    "B-CW": 2,
-    "I-CW": 3,
-    "B-GRP": 4,
-    "I-GRP": 5,
-    "B-LOC": 6,
-    "I-LOC": 7,
-    "B-PER": 8,
-    "I-PER": 9,
-    "B-PROD": 10,
-    "I-PROD": 11,
-    "O": 12,
-}
-resume_iob = {
-    "M-RACE": 0,
-    "B-PRO": 1,
-    "S-ORG": 2,
-    "B-LOC": 3,
-    "B-CONT": 4,
-    "M-CONT": 5,
-    "E-LOC": 6,
-    "M-PRO": 7,
-    "M-LOC": 8,
-    "M-TITLE": 9,
-    "B-ORG": 10,
-    "M-ORG": 11,
-    "E-ORG": 12,
-    "E-RACE": 13,
-    "B-EDU": 14,
-    "S-NAME": 15,
-    "B-TITLE": 16,
-    "S-RACE": 17,
-    "B-NAME": 18,
-    "B-RACE": 19,
-    "E-NAME": 20,
-    "O": 21,
-    "E-CONT": 22,
-    "M-EDU": 23,
-    "E-TITLE": 24,
-    "E-EDU": 25,
-    "M-NAME": 26,
-    "E-PRO": 27,
-}
-weibo_iob = {
-    "O": 0,
-    "B-PER.NOM": 1,
-    "E-PER.NOM": 2,
-    "B-LOC.NAM": 3,
-    "E-LOC.NAM": 4,
-    "B-PER.NAM": 5,
-    "M-PER.NAM": 6,
-    "E-PER.NAM": 7,
-    "S-PER.NOM": 8,
-    "B-GPE.NAM": 9,
-    "E-GPE.NAM": 10,
-    "B-ORG.NAM": 11,
-    "M-ORG.NAM": 12,
-    "E-ORG.NAM": 13,
-    "M-PER.NOM": 14,
-    "S-GPE.NAM": 15,
-    "B-ORG.NOM": 16,
-    "E-ORG.NOM": 17,
-    "M-LOC.NAM": 18,
-    "M-ORG.NOM": 19,
-    "B-LOC.NOM": 20,
-    "M-LOC.NOM": 21,
-    "E-LOC.NOM": 22,
-    "B-GPE.NOM": 23,
-    "E-GPE.NOM": 24,
-    "M-GPE.NAM": 25,
-    "S-PER.NAM": 26,
-    "S-LOC.NOM": 27,
-}
-msra_iob = {
-    "O": 0,
-    "S-NS": 1,
-    "B-NS": 2,
-    "E-NS": 3,
-    "B-NT": 4,
-    "M-NT": 5,
-    "E-NT": 6,
-    "M-NS": 7,
-    "B-NR": 8,
-    "M-NR": 9,
-    "E-NR": 10,
-    "S-NR": 11,
-    "S-NT": 12,
-}
-ontonotes_iob = {
-    "E-PER": 0,
-    "E-GPE": 1,
-    "E-LOC": 2,
-    "M-ORG": 3,
-    "E-ORG": 4,
-    "S-ORG": 5,
-    "B-GPE": 6,
-    "O": 7,
-    "M-PER": 8,
-    "M-LOC": 9,
-    "B-PER": 10,
-    "M-GPE": 11,
-    "S-LOC": 12,
-    "B-ORG": 13,
-    "S-PER": 14,
-    "B-LOC": 15,
-    "S-GPE": 16,
-}
-
-
-def get_tagset(tagging_scheme):
-    if os.path.isfile(tagging_scheme):
-        # read the tagging scheme from a file
-        sep = "\t" if tagging_scheme.endswith(".tsv") else ","
-        df = pd.read_csv(tagging_scheme, sep=sep)
-        tags = {row["tag"]: row["idx"] for idx, row in df.iterrows()}
-        return tags
-
-    if "conll" in tagging_scheme:
-        return conll_iob
-    elif "wnut" in tagging_scheme:
-        return wnut_iob
-    elif "resume" in tagging_scheme:
-        return resume_iob
-    elif "ontonotes" in tagging_scheme:
-        return ontonotes_iob
-    elif "msra" in tagging_scheme:
-        return msra_iob
-    elif "weibo" in tagging_scheme:
-        return weibo_iob
 
 
 def get_out_filename(out_dir, model, prefix):
@@ -174,26 +27,6 @@ def write_eval_performance(eval_performance, out_file):
 
     open(out_file, "wt").write(outstr)
     logger.info("Finished writing evaluation performance for {}".format(out_file))
-
-
-def get_reader(
-    file_path,
-    max_instances=-1,
-    max_length=50,
-    target_vocab=None,
-    encoder_model="xlm-roberta-large",
-):
-    if file_path is None:
-        return None
-    reader = CoNLLReader(
-        max_instances=max_instances,
-        max_length=max_length,
-        target_vocab=target_vocab,
-        encoder_model=encoder_model,
-    )
-    reader.read_data(file_path)
-
-    return reader
 
 
 def create_model(
@@ -253,7 +86,7 @@ def save_model(trainer, out_dir, model_name="", timestamp=None):
     return outfile
 
 
-def train_model(model, out_dir="", epochs=10, gpus=1):
+def train_model(model, out_dir=None, epochs=10, gpus=1):
     trainer = get_trainer(gpus=gpus, out_dir=out_dir, epochs=epochs)
     trainer.fit(model)
     return trainer
@@ -263,24 +96,22 @@ def get_trainer(gpus=4, is_test=False, out_dir=None, epochs=10):
     seed_everything(42)
     if is_test:
         return (
-            pl.Trainer(gpus=1)
+            Trainer(devices=1)
             if torch.cuda.is_available()
-            else pl.Trainer(val_check_interval=100)
+            else Trainer(val_check_interval=100)
         )
 
     if torch.cuda.is_available():
-        trainer = pl.Trainer(
-            gpus=gpus,
+        trainer = Trainer(
+            devices=gpus,
             deterministic=True,
             max_epochs=epochs,
             callbacks=[get_model_earlystopping_callback()],
             default_root_dir=out_dir,
-            distributed_backend="ddp",
-            checkpoint_callback=False,
         )
         trainer.callbacks.append(get_lr_logger())
     else:
-        trainer = pl.Trainer(max_epochs=epochs, default_root_dir=out_dir)
+        trainer = Trainer(max_epochs=epochs, default_root_dir=out_dir)
 
     return trainer
 
