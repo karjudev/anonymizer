@@ -90,7 +90,7 @@ def save_model(trainer, out_dir, model_name="", timestamp=None):
 
 
 def train_model(model, out_dir=None, epochs=10, gpus=1, trial=None):
-    trainer = get_trainer(gpus=gpus, out_dir=out_dir, epochs=epochs)
+    trainer = get_trainer(gpus=gpus, out_dir=out_dir, epochs=epochs, trial=trial)
     trainer.fit(model)
     return trainer
 
