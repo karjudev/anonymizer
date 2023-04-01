@@ -4,8 +4,11 @@ import time
 import torch
 from lightning.pytorch import seed_everything, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
+import optuna
+from optuna.pruners import MedianPruner
 
 from log import logger
+from model.callbacks import PyTorchLightningPruningCallback
 from model.ner_model import NERBaseAnnotator
 
 
@@ -86,19 +89,52 @@ def save_model(trainer, out_dir, model_name="", timestamp=None):
     return outfile
 
 
-def train_model(model, out_dir=None, epochs=10, gpus=1):
+def train_model(model, out_dir=None, epochs=10, gpus=1, trial=None):
     trainer = get_trainer(gpus=gpus, out_dir=out_dir, epochs=epochs)
     trainer.fit(model)
     return trainer
 
 
-def get_trainer(gpus=4, is_test=False, out_dir=None, epochs=10):
+def tune_model(
+    train_data,
+    tune_data,
+    encoder_model,
+    tag_to_id,
+    batch_size,
+    dropout_rate,
+    epochs,
+    n_trials=10,
+):
+    def objective(trial):
+        lr = trial.suggest_float("lr", low=1e-5, high=5e-4)
+        hyperparameters = {"lr": lr}
+        model = create_model(
+            train_data,
+            tune_data,
+            tag_to_id,
+            batch_size,
+            dropout_rate,
+            stage="tuning",
+            lr=lr,
+            encoder_model=encoder_model,
+        )
+        trainer = train_model(model=model, epochs=epochs, trial=trial)
+        trainer.logger.log_hyperparams(hyperparameters)
+        return trainer.logged_metrics["MD@F1"].item()
+
+    study = optuna.create_study(direction="maximize", pruner=MedianPruner())
+    study.optimize(objective, n_trials=n_trials)
+    return study.best_value, study.best_params
+
+
+def get_trainer(gpus=4, is_test=False, out_dir=None, epochs=10, trial=None):
+    enable_checkpointing = out_dir is not None
     seed_everything(42)
     if is_test:
         return (
-            Trainer(devices=1)
+            Trainer(devices=1, enable_checkpointing=enable_checkpointing)
             if torch.cuda.is_available()
-            else Trainer(val_check_interval=100)
+            else Trainer(val_check_interval=100, enable_checkpointing=enable_checkpointing)
         )
 
     if torch.cuda.is_available():
@@ -106,12 +142,13 @@ def get_trainer(gpus=4, is_test=False, out_dir=None, epochs=10):
             devices=gpus,
             deterministic=True,
             max_epochs=epochs,
-            callbacks=[get_model_earlystopping_callback()],
+            callbacks=[get_model_earlystopping_callback(trial)],
             default_root_dir=out_dir,
+            enable_checkpointing=enable_checkpointing
         )
         trainer.callbacks.append(get_lr_logger())
     else:
-        trainer = Trainer(max_epochs=epochs, default_root_dir=out_dir)
+        trainer = Trainer(max_epochs=epochs, enable_checkpointing=enable_checkpointing, default_root_dir=out_dir)
 
     return trainer
 
@@ -121,10 +158,13 @@ def get_lr_logger():
     return lr_monitor
 
 
-def get_model_earlystopping_callback():
-    es_clb = EarlyStopping(
-        monitor="val_loss", min_delta=0.001, patience=3, verbose=True, mode="min"
-    )
+def get_model_earlystopping_callback(trial=None, metric="MD@F1"):
+    if trial is None:
+        es_clb = EarlyStopping(
+            monitor=metric, min_delta=0.001, patience=3, verbose=True, mode="min"
+        )
+    else:
+        es_clb = PyTorchLightningPruningCallback(trial, monitor=metric)
     return es_clb
 
 
