@@ -97,9 +97,6 @@ class SpanF1:
         all_metrics["MD@P"] = entity_precision
         all_metrics["MD@F1"] = compute_fbeta(entity_precision, entity_recall, beta=1.0)
         all_metrics["MD@F2"] = compute_fbeta(entity_precision, entity_recall, beta=2.0)
-        all_metrics["ALLTRUE"] = self._num_gold_mentions
-        all_metrics["ALLRECALLED"] = self._num_recalled_mentions
-        all_metrics["ALLPRED"] = self._num_predicted_mentions
         if reset:
             self.reset()
         return all_metrics
