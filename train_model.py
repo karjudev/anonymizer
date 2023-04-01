@@ -1,13 +1,14 @@
 from pathlib import Path
 import time
+from typing import List
 import typer
+from transformers import AutoTokenizer
+from data.ordinances import OrdinancesDataset
 
 from utils.utils import (
-    get_reader,
     train_model,
     create_model,
     save_model,
-    get_tagset,
 )
 
 
@@ -18,38 +19,44 @@ def main(
     model_name: str,
     encoder_model: str,
     lr: float,
+    binarize: bool = False,
+    ignore_tags: List[str] = None,
     epochs: int = 5,
-    iob_tagging: str = "kind",
-    max_instances: int = -1,
     max_length: int = 512,
     dropout: float = 0.1,
     batch_size: int = 128,
     gpus: int = 1,
     stage: str = "training",
 ) -> None:
+    ignore_tags = set(ignore_tags) if len(ignore_tags) > 0 else None
     timestamp = time.time()
     out_dir_path = out_dir / model_name
-
+    # Loads the tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(encoder_model)
     # load the dataset first
-    train_data = get_reader(
-        file_path=training,
-        target_vocab=get_tagset(iob_tagging),
-        encoder_model=encoder_model,
-        max_instances=max_instances,
-        max_length=max_length,
+    train_data = OrdinancesDataset.from_file(
+        filepath=training,
+        binarize=binarize,
+        tokenizer=tokenizer,
+        ignore_tags=ignore_tags,
+        max_length=max_length
     )
-    dev_data = get_reader(
-        file_path=validation,
-        target_vocab=get_tagset(iob_tagging),
-        encoder_model=encoder_model,
-        max_instances=max_instances,
-        max_length=max_length,
+    # Gets the start mapping
+    label2id = train_data.get_target_vocab()
+    # Loads the validation data
+    dev_data = OrdinancesDataset.from_file(
+        filepath=validation,
+        binarize=binarize,
+        tokenizer=tokenizer,
+        ignore_tags=ignore_tags,
+        label2id=label2id,
+        max_length=max_length
     )
 
     model = create_model(
         train_data=train_data,
         dev_data=dev_data,
-        tag_to_id=train_data.get_target_vocab(),
+        tag_to_id=label2id,
         dropout_rate=dropout,
         batch_size=batch_size,
         stage=stage,
