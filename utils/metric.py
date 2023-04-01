@@ -1,11 +1,8 @@
 from collections import defaultdict
 from typing import Set
-from overrides import overrides
-
-from allennlp.training.metrics.metric import Metric
 
 
-class SpanF1(Metric):
+class SpanF1:
     def __init__(self, non_entity_labels=['O']) -> None:
         self._num_gold_mentions = 0
         self._num_recalled_mentions = 0
@@ -13,7 +10,6 @@ class SpanF1(Metric):
         self._TP, self._FP, self._GT = defaultdict(int), defaultdict(int), defaultdict(int)
         self.non_entity_labels = set(non_entity_labels)
 
-    @overrides
     def __call__(self, batched_predicted_spans, batched_gold_spans, sentences=None):
         non_entity_labels = self.non_entity_labels
 
@@ -37,7 +33,6 @@ class SpanF1(Metric):
                 else:
                     self._FP[val] += 1
 
-    @overrides
     def get_metric(self, reset: bool = False) -> float:
         all_tags: Set[str] = set()
         all_tags.update(self._TP.keys())
@@ -88,7 +83,6 @@ class SpanF1(Metric):
         f1_measure = 2. * ((precision * recall) / (precision + recall + 1e-13))
         return precision, recall, f1_measure
 
-    @overrides
     def reset(self):
         self._num_gold_mentions = 0
         self._num_recalled_mentions = 0
