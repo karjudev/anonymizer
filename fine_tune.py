@@ -1,18 +1,55 @@
+from pathlib import Path
 import time
 
-from utils.utils import get_reader, train_model, save_model, parse_args, get_tagset, load_model
+import typer
 
-if __name__ == '__main__':
+from utils.utils import (
+    get_reader,
+    train_model,
+    save_model,
+    get_tagset,
+    load_model,
+)
+
+
+def main(
+    training: Path,
+    model_path: Path,
+    model_name: str,
+    out_dir: Path,
+    encoder_model: str,
+    epochs: int = 5,
+    iob_tagging: str = "kind",
+    max_instances: int = -1,
+    max_length: int = 512,
+) -> None:
     timestamp = time.time()
-    sg = parse_args()
-    out_dir_path = sg.out_dir + '/' + sg.model_name
+    out_dir_path = out_dir / model_name
 
     # load the dataset first
-    train_data = get_reader(file_path=sg.train, target_vocab=get_tagset(sg.iob_tagging), encoder_model=sg.encoder_model, max_instances=sg.max_instances, max_length=sg.max_length)
-    model, model_file = load_model(sg.model, tag_to_id=get_tagset(sg.iob_tagging), stage='finetune')
+    train_data = get_reader(
+        file_path=training,
+        target_vocab=get_tagset(iob_tagging),
+        encoder_model=encoder_model,
+        max_instances=max_instances,
+        max_length=max_length,
+    )
+    model, model_file = load_model(
+        model_path, tag_to_id=get_tagset(iob_tagging), stage="finetune"
+    )
     model.train_data = train_data
 
-    trainer = train_model(model=model, out_dir=out_dir_path, epochs=sg.epochs)
+    trainer = train_model(model=model, out_dir=out_dir_path, epochs=epochs)
 
     # use pytorch lightnings saver here.
-    out_model_path = save_model(trainer=trainer, out_dir=out_dir_path, model_name=sg.model_name, timestamp=timestamp)
+    out_model_path = save_model(
+        trainer=trainer,
+        out_dir=out_dir_path,
+        model_name=model_name,
+        timestamp=timestamp,
+    )
+    typer.echo(f"Model saved in {out_model_path}")
+
+
+if __name__ == "__main__":
+    typer.run(main)
