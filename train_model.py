@@ -24,7 +24,7 @@ def main(
     epochs: int = 5,
     max_length: int = 512,
     dropout: float = 0.1,
-    batch_size: int = 128,
+    batch_size: int = 16,
     gpus: int = 1,
     stage: str = "training",
 ) -> None:
