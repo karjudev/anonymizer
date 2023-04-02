@@ -70,19 +70,14 @@ def load_model(model_file, tag_to_id=None, stage="test"):
 
 
 def save_model(trainer, out_dir, model_name="", timestamp=None):
-    out_dir = (
-        out_dir
-        + "/lightning_logs/version_"
-        + str(trainer.logger.version)
-        + "/checkpoints/"
+    out_dir = out_dir / (
+        "lightning_logs/version_" + str(trainer.logger.version) + "/checkpoints/"
     )
     if timestamp is None:
         timestamp = time.time()
     os.makedirs(out_dir, exist_ok=True)
 
-    outfile = (
-        out_dir + "/" + model_name + "_timestamp_" + str(timestamp) + "_final.ckpt"
-    )
+    outfile = out_dir / (model_name + "_timestamp_" + str(timestamp) + "_final.ckpt")
     trainer.save_checkpoint(outfile, weights_only=True)
 
     logger.info("Stored model {}.".format(outfile))
@@ -120,7 +115,7 @@ def tune_model(
         )
         trainer = train_model(model=model, epochs=epochs, trial=trial)
         trainer.logger.log_hyperparams(hyperparameters)
-        return trainer.logged_metrics["MD@F1"].item()
+        return trainer.logged_metrics["val_MD@F1"].item()
 
     study = optuna.create_study(direction="maximize", pruner=MedianPruner())
     study.optimize(objective, n_trials=n_trials)
@@ -134,7 +129,9 @@ def get_trainer(gpus=4, is_test=False, out_dir=None, epochs=10, trial=None):
         return (
             Trainer(devices=1, enable_checkpointing=enable_checkpointing)
             if torch.cuda.is_available()
-            else Trainer(val_check_interval=100, enable_checkpointing=enable_checkpointing)
+            else Trainer(
+                val_check_interval=100, enable_checkpointing=enable_checkpointing
+            )
         )
 
     if torch.cuda.is_available():
@@ -144,11 +141,15 @@ def get_trainer(gpus=4, is_test=False, out_dir=None, epochs=10, trial=None):
             max_epochs=epochs,
             callbacks=[get_model_earlystopping_callback(trial)],
             default_root_dir=out_dir,
-            enable_checkpointing=enable_checkpointing
+            enable_checkpointing=enable_checkpointing,
         )
         trainer.callbacks.append(get_lr_logger())
     else:
-        trainer = Trainer(max_epochs=epochs, enable_checkpointing=enable_checkpointing, default_root_dir=out_dir)
+        trainer = Trainer(
+            max_epochs=epochs,
+            enable_checkpointing=enable_checkpointing,
+            default_root_dir=out_dir,
+        )
 
     return trainer
 
@@ -158,7 +159,7 @@ def get_lr_logger():
     return lr_monitor
 
 
-def get_model_earlystopping_callback(trial=None, metric="MD@F1"):
+def get_model_earlystopping_callback(trial=None, metric="val_MD@F1"):
     if trial is None:
         es_clb = EarlyStopping(
             monitor=metric, min_delta=0.001, patience=3, verbose=True, mode="min"
