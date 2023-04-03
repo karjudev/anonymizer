@@ -1,10 +1,11 @@
 import os
 from pathlib import Path
-from typing import Iterable, List, Mapping, Optional, Set, Tuple
+from typing import Iterable, List, Literal, Mapping, Optional, Set, Tuple
 
 import torch
 from log import logger
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
+from lightning.pytorch import LightningDataModule
 import srsly
 from transformers import PreTrainedTokenizer
 
@@ -69,9 +70,6 @@ class OrdinancesDataset(Dataset):
         self.__max_length = max_length
         self.__stride = stride
         self.__instances = []
-        self.pad_token = tokenizer.special_tokens_map["pad_token"]
-        self.pad_token_id = tokenizer.get_vocab()[self.pad_token]
-        self.sep_token = tokenizer.special_tokens_map["sep_token"]
 
     def __compute_token_mask(self, word_ids: List[int]) -> torch.Tensor:
         token_mask = []
@@ -176,3 +174,114 @@ class OrdinancesDataset(Dataset):
         )
         dataset.read_file(filepath)
         return dataset
+
+
+class OrdinancesDataModule(LightningDataModule):
+    def __init__(
+        self,
+        directory: Path,
+        binarize: bool,
+        tokenizer: PreTrainedTokenizer,
+        stage: Literal["training", "tuning", "testing"],
+        ignore_tags: Set[str] = None,
+        batch_size: int = 16,
+        num_gpus: int = 1,
+        num_workers: int = 8,
+        training_filename: str = "training.jsonl",
+        tuning_filename: str = "tuning.jsonl",
+        validation_filename: str = "validation.jsonl",
+    ) -> None:
+        super().__init__()
+        self.batch_size = batch_size
+        self.num_gpus = num_gpus
+        self.num_workers = num_workers
+        # Gets padding and separation token
+        self.pad_token = tokenizer.special_tokens_map["pad_token"]
+        self.pad_token_id = tokenizer.get_vocab()[self.pad_token]
+        self.sep_token = tokenizer.special_tokens_map["sep_token"]
+        # Loads training first
+        self.training = OrdinancesDataset.from_file(
+            directory / training_filename, binarize, tokenizer, ignore_tags
+        )
+        # Extracts Label to ID mapping
+        self.tag_to_id = self.training.get_target_vocab()
+        # Loads tuning and validation
+        self.tuning = None
+        self.validation = None
+        if stage == "tuning":
+            self.tuning = OrdinancesDataset.from_file(
+                directory / tuning_filename,
+                binarize,
+                tokenizer,
+                ignore_tags,
+                self.tag_to_id,
+            )
+        elif stage == "training":
+            self.validation = OrdinancesDataset.from_file(
+                directory / validation_filename,
+                binarize,
+                tokenizer,
+                ignore_tags,
+                self.tag_to_id,
+            )
+
+    def num_training_steps(
+        self, epochs: int, fraction: float = 0.01
+    ) -> Tuple[int, int]:
+        num_batches = len(self.training) // (self.batch_size * self.num_gpus)
+        num_total_steps = epochs * num_batches
+        num_warmup_steps = num_total_steps * fraction
+        return num_total_steps, num_warmup_steps
+
+    def __collate_batch(self, batch):
+        batch_ = list(zip(*batch))
+        tokens, masks, token_masks, gold_spans, tags = (
+            batch_[0],
+            batch_[1],
+            batch_[2],
+            batch_[3],
+            batch_[4],
+        )
+
+        max_len = max([len(token) for token in tokens])
+        token_tensor = torch.empty(size=(len(tokens), max_len), dtype=torch.long).fill_(
+            self.pad_token_id
+        )
+        tag_tensor = torch.empty(size=(len(tokens), max_len), dtype=torch.long).fill_(
+            self.tag_to_id["O"]
+        )
+        mask_tensor = torch.zeros(size=(len(tokens), max_len), dtype=torch.bool)
+        token_masks_tensor = torch.zeros(size=(len(tokens), max_len), dtype=torch.bool)
+
+        for i in range(len(tokens)):
+            tokens_ = tokens[i]
+            seq_len = len(tokens_)
+
+            token_tensor[i, :seq_len] = tokens_
+            tag_tensor[i, :seq_len] = tags[i]
+            mask_tensor[i, :seq_len] = masks[i]
+            token_masks_tensor[i, :seq_len] = token_masks[i]
+
+        return token_tensor, tag_tensor, mask_tensor, token_masks_tensor, gold_spans
+
+    def __get_dataloader(self, dataset: OrdinancesDataset) -> DataLoader:
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            collate_fn=self.__collate_batch,
+            pin_memory=True,
+        )
+
+    def train_dataloader(self) -> DataLoader:
+        return self.__get_dataloader(self.training)
+
+    def tune_dataloader(self) -> DataLoader:
+        if self.tuning is None:
+            raise ValueError("We are in training mode, use `val_dataloader`")
+        return self.__get_dataloader(self.tuning)
+
+    def val_dataloader(self) -> DataLoader:
+        if self.validation is None:
+            raise ValueError("We are in tuning mode, use `tune_dataloader`")
+        return self.__get_dataloader(self.validation)

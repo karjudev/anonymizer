@@ -3,18 +3,17 @@ import time
 from typing import List
 import typer
 from transformers import AutoTokenizer
-from data.ordinances import OrdinancesDataset
+from data.ordinances import OrdinancesDataModule
+from model.ner_model import NERBaseAnnotator
 
 from utils.utils import (
     train_model,
-    create_model,
     save_model,
 )
 
 
 def main(
-    training: Path,
-    validation: Path,
+    data_directory: Path,
     out_dir: Path,
     model_name: str,
     encoder_model: str,
@@ -22,11 +21,8 @@ def main(
     binarize: bool = False,
     ignore_tags: List[str] = None,
     epochs: int = 5,
-    max_length: int = 512,
     dropout: float = 0.1,
     batch_size: int = 16,
-    gpus: int = 1,
-    stage: str = "training",
 ) -> None:
     ignore_tags = set(ignore_tags) if len(ignore_tags) > 0 else None
     timestamp = time.time()
@@ -34,38 +30,29 @@ def main(
     # Loads the tokenizer
     tokenizer = AutoTokenizer.from_pretrained(encoder_model)
     # load the dataset first
-    train_data = OrdinancesDataset.from_file(
-        filepath=training,
+    datamodule = OrdinancesDataModule(
+        data_directory,
         binarize=binarize,
         tokenizer=tokenizer,
+        stage="training",
         ignore_tags=ignore_tags,
-        max_length=max_length
-    )
-    # Gets the start mapping
-    label2id = train_data.get_target_vocab()
-    # Loads the validation data
-    dev_data = OrdinancesDataset.from_file(
-        filepath=validation,
-        binarize=binarize,
-        tokenizer=tokenizer,
-        ignore_tags=ignore_tags,
-        label2id=label2id,
-        max_length=max_length
-    )
-
-    model = create_model(
-        train_data=train_data,
-        dev_data=dev_data,
-        tag_to_id=label2id,
-        dropout_rate=dropout,
         batch_size=batch_size,
-        stage=stage,
-        lr=lr,
+    )
+    # Loads the model
+    num_training_steps, num_warmup_steps = datamodule.num_training_steps(epochs)
+    model = NERBaseAnnotator(
         encoder_model=encoder_model,
-        num_gpus=gpus,
+        tag_to_id=datamodule.tag_to_id,
+        lr=lr,
+        num_training_steps=num_training_steps,
+        num_warmup_steps=num_warmup_steps,
+        dropout_rate=dropout,
+        stage="training",
     )
 
-    trainer = train_model(model=model, out_dir=out_dir_path, epochs=epochs)
+    trainer = train_model(
+        model=model, datamodule=datamodule, out_dir=out_dir_path, epochs=epochs
+    )
 
     # use pytorch lightnings saver here.
     out_model_path = save_model(
