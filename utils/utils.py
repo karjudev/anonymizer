@@ -100,7 +100,7 @@ def tune_model(
     def objective(trial):
         # Extracts hyperparameters
         lr = trial.suggest_float("lr", low=1e-5, high=5e-4)
-        weight_decay = trial.suggest_float("weight_decay", low=0.01, high=0.1)
+        weight_decay = trial.suggest_float("weight_decay", low=0.001, high=0.01)
         dropout_rate = trial.suggest_float("dropout_rate", low=0.01, high=0.1)
         grad_norm = trial.suggest_float("grad_norm", low=1.0, high=5.0)
         hyperparameters = {
