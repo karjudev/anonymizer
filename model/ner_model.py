@@ -28,7 +28,7 @@ class NERBaseAnnotator(pl.LightningModule):
         num_warmup_steps: int,
         dropout_rate: float = 0.1,
         weight_decay: float = 0.01,
-        stage: Literal["tuning", "training", "testing", "predict"] = "training",
+        stage: Literal["training", "evaluation", "prediction"] = "training",
     ):
         super(NERBaseAnnotator, self).__init__()
 
