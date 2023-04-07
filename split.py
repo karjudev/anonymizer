@@ -3,31 +3,29 @@ from pathlib import Path
 from typing import List
 import typer
 import srsly
+from sklearn.model_selection import train_test_split
 
 
 def main(
     jsonl_filepath: Path,
     directory: Path,
     validation_proportion: float = 0.2,
-    tuning_proportion: float = 0.2,
+    evaluation_proportion: float = 0.1,
     training_filename: str = "training.jsonl",
-    tuning_filename: str = "tuning.jsonl",
     validation_filename: str = "validation.jsonl",
+    evaluation_filename: str = "evaluation.jsonl",
+    random_state: int = 0,
 ) -> None:
     records: List = list(srsly.read_jsonl(jsonl_filepath))
-    # Number of records in the validation set
-    num_validation = int(len(records) * validation_proportion)
-    # Extracts the validation set
-    dev, validation = records[:-num_validation], records[-num_validation:]
-    # Number of records in the tuning set
-    num_tuning = int(len(dev) * tuning_proportion)
-    # Extracts the tuning set
-    training, tuning = dev[:-num_tuning], dev[-num_tuning:]
+    # Holds out evaluation set
+    dev, eval = train_test_split(records, test_size=evaluation_proportion, random_state=random_state)
+    # Splits training and validation set
+    training, validation = train_test_split(dev, test_size=validation_proportion, random_state=random_state)
     # Writes data on disk
     os.makedirs(directory, exist_ok=True)
     srsly.write_jsonl(directory / training_filename, training)
-    srsly.write_jsonl(directory / tuning_filename, tuning)
     srsly.write_jsonl(directory / validation_filename, validation)
+    srsly.write_jsonl(directory / evaluation_filename, eval)
 
 
 if __name__ == "__main__":

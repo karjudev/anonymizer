@@ -182,14 +182,14 @@ class OrdinancesDataModule(LightningDataModule):
         directory: Path,
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
-        stage: Literal["training", "tuning", "testing"],
+        stage: Literal["training", "evaluation", "prediction"],
         ignore_tags: Set[str] = None,
         batch_size: int = 16,
         num_gpus: int = 1,
         num_workers: int = 8,
         training_filename: str = "training.jsonl",
-        tuning_filename: str = "tuning.jsonl",
         validation_filename: str = "validation.jsonl",
+        evaluation_filename: str = "evaluation.jsonl",
     ) -> None:
         super().__init__()
         self.batch_size = batch_size
@@ -206,23 +206,19 @@ class OrdinancesDataModule(LightningDataModule):
         # Extracts Label to ID mapping
         self.tag_to_id = self.training.get_target_vocab()
         # Loads tuning and validation
-        self.tuning = None
         self.validation = None
-        if stage == "tuning":
-            self.tuning = OrdinancesDataset.from_file(
-                directory / tuning_filename,
-                binarize,
-                tokenizer,
-                ignore_tags,
-                self.tag_to_id,
-            )
-        elif stage == "training":
+        self.evaluation = None
+        if stage == "training":
             self.validation = OrdinancesDataset.from_file(
                 directory / validation_filename,
                 binarize,
                 tokenizer,
                 ignore_tags,
                 self.tag_to_id,
+            )
+        elif stage == "evaluation":
+            self.evaluation = OrdinancesDataset.from_file(
+                directory / evaluation_filename, binarize, tokenizer, self.tag_to_id
             )
 
     def num_training_steps(
@@ -276,12 +272,12 @@ class OrdinancesDataModule(LightningDataModule):
     def train_dataloader(self) -> DataLoader:
         return self.__get_dataloader(self.training)
 
-    def tune_dataloader(self) -> DataLoader:
-        if self.tuning is None:
-            raise ValueError("We are in training mode, use `val_dataloader`")
-        return self.__get_dataloader(self.tuning)
-
     def val_dataloader(self) -> DataLoader:
         if self.validation is None:
-            raise ValueError("We are in tuning mode, use `tune_dataloader`")
+            raise ValueError("We are in evaluation mode, use `eval_dataloader`")
         return self.__get_dataloader(self.validation)
+
+    def eval_dataloader(self) -> DataLoader:
+        if self.evaluation is None:
+            raise ValueError("We are in training mode, use `val_dataloader`")
+        return self.__get_dataloader(self.evaluation)

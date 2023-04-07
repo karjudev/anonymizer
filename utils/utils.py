@@ -85,15 +85,12 @@ def tune_model(
     datamodule: OrdinancesDataModule,
     encoder_model: str,
     epochs: int,
-    dropout_rate: float,
     n_trials: int = 10,
     metric: str = "val_MD@F1",
 ) -> Tuple[float, Mapping[str, Any]]:
     seed_everything(42)
-    # Training and validation data
+    # Mapping from label to ID
     tag_to_id = datamodule.tag_to_id
-    train_data = datamodule.train_dataloader()
-    tune_data = datamodule.tune_dataloader()
     # Number of training and warm-up steps
     num_training_steps, num_warmup_steps = datamodule.num_training_steps(epochs)
 
@@ -132,9 +129,9 @@ def tune_model(
         )
         trainer.logger.log_hyperparams(hyperparameters)
         # Fits the model
-        trainer.fit(model, train_dataloaders=train_data, val_dataloaders=tune_data)
+        trainer.fit(model, datamodule=datamodule)
         # Returns the best metric
-        return trainer.logged_metrics["val_MD@F1"].item()
+        return trainer.logged_metrics[metric].item()
 
     study = optuna.create_study(direction="maximize", pruner=MedianPruner())
     study.optimize(objective, n_trials=n_trials)
