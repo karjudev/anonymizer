@@ -1,50 +1,57 @@
 from pathlib import Path
+from typing import Iterable, List, Mapping
 
-from torch.utils.data import DataLoader
 import typer
+import srsly
+from transformers import AutoTokenizer, PreTrainedTokenizer
+from lightning.pytorch import Trainer
 
-from utils.utils import (
-    get_reader,
-    load_model,
-    get_trainer,
-    get_out_filename,
-    write_eval_performance,
-    get_tagset,
-)
+from data.ordinances import OrdinancesDataModule
+from utils.utils import load_model, get_out_filename, write_eval_performance
+from model.ner_model import NERBaseAnnotator
+from model.prediction import predict
+
+
+def predict_records(
+    records: Iterable[Mapping[str, int | str]],
+    model: NERBaseAnnotator,
+    tokenizer: PreTrainedTokenizer,
+    max_length: int,
+) -> Iterable[Mapping[str, int | str]]:
+    for record in records:
+        text = record["text"]
+        ground_truth = record["entities"]
+        predicted = predict(model, tokenizer, text, max_length)
+        yield {"text": text, "ground_truth": ground_truth, "predicted": predicted}
 
 
 def main(
-    test: Path,
-    model_path: Path,
+    data_dir: Path,
+    model_dir: Path,
     out_dir: Path,
     prefix: str,
     encoder_model: str,
-    iob_tagging: str = "kind",
-    max_instances: int = -1,
+    binarize: bool = False,
+    ignore_tags: List[str] = None,
     max_length: int = 512,
-    batch_size: int = 128,
+    predictions_filename: str = "predictions.jsonl",
 ) -> None:
-    # load the dataset first
-    test_data = get_reader(
-        file_path=test,
-        target_vocab=get_tagset(iob_tagging),
-        max_instances=max_instances,
-        max_length=max_length,
-        encoder_model=encoder_model,
-    )
+    ignore_tags = set(ignore_tags) if len(ignore_tags) > 0 else None
+    tokenizer = AutoTokenizer.from_pretrained(encoder_model)
+    datamodule = OrdinancesDataModule(data_dir, binarize, tokenizer, stage="evaluation")
+    eval_data = datamodule.eval_dataloader()
 
-    model, model_file = load_model(model_path, tag_to_id=get_tagset(iob_tagging))
-    trainer = get_trainer(is_test=True)
-    out = trainer.test(
-        model,
-        test_dataloaders=DataLoader(
-            test_data, batch_size=batch_size, collate_fn=model.collate_batch
-        ),
-    )
+    model, model_file = load_model(str(model_dir), tag_to_id=datamodule.tag_to_id)
+    trainer = Trainer(accelerator="cpu", enable_checkpointing=False)
+    out = trainer.test(model, dataloaders=eval_data)
 
-    # use pytorch lightnings saver here.
     eval_file = get_out_filename(out_dir, model_file, prefix=prefix)
     write_eval_performance(out, eval_file)
+
+    pred_output = predict_records(
+        srsly.read_jsonl(data_dir / "evaluation.jsonl"), model, tokenizer, max_length
+    )
+    srsly.write_jsonl(out_dir / predictions_filename, pred_output)
 
 
 if __name__ == "__main__":
