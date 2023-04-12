@@ -1,4 +1,4 @@
-from typing import Dict, Literal
+from typing import Dict, Literal, Optional, Tuple
 from itertools import compress
 
 import lightning.pytorch as pl
@@ -28,7 +28,7 @@ class NERBaseAnnotator(pl.LightningModule):
         num_warmup_steps: int,
         dropout_rate: float = 0.1,
         weight_decay: float = 0.01,
-        stage: Literal["training", "evaluation", "prediction"] = "training",
+        stage: Literal["training", "prediction"] = "training",
     ):
         super(NERBaseAnnotator, self).__init__()
 
@@ -157,12 +157,18 @@ class NERBaseAnnotator(pl.LightningModule):
             prog_bar=True,
             logger=True,
         )
+    
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        tags: Optional[Dict[Tuple[int, int], str]] = None,
+        labels: Optional[torch.Tensor] = None,
+        mode: str = "prediction",
+    ) -> torch.Tensor:
+        batch_size = input_ids.size(0)
 
-    def perform_forward_step(self, batch, mode=""):
-        tokens, tags, mask, token_mask, metadata = batch
-        batch_size = tokens.size(0)
-
-        embedded_text_input = self.encoder(input_ids=tokens, attention_mask=mask)
+        embedded_text_input = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         embedded_text_input = embedded_text_input.last_hidden_state
         embedded_text_input = self.dropout(F.leaky_relu(embedded_text_input))
 
@@ -173,32 +179,41 @@ class NERBaseAnnotator(pl.LightningModule):
         # compute the log-likelihood loss and compute the best NER annotation sequence
         output = self._compute_token_tags(
             token_scores=token_scores,
-            mask=mask,
-            tags=tags,
-            metadata=metadata,
+            mask=attention_mask,
+            tags=labels,
+            metadata=tags,
             batch_size=batch_size,
             mode=mode,
+        )
+        return output
+
+    def perform_forward_step(self, batch, mode=""):
+        tokens, tags, mask, token_mask, metadata = batch
+        output = self(
+            input_ids=tokens,
+            attention_mask=mask,
+            tags=metadata,
+            labels=tags,
+            mode=mode
         )
         return output
 
     def _compute_token_tags(
         self, token_scores, mask, tags, metadata, batch_size, mode=""
     ):
-        # compute the log-likelihood loss and compute the best NER annotation sequence
-        loss = -self.crf_layer(token_scores, tags, mask) / float(batch_size)
         best_path = self.crf_layer.viterbi_tags(token_scores, mask)
-
-        pred_results, pred_tags = [], []
+        pred_results = []
         for i in range(batch_size):
             tag_seq, _ = best_path[i]
-            pred_tags.append([self.id_to_tag[x] for x in tag_seq])
             pred_results.append(extract_spans(tag_seq, self.id_to_tag))
-
-        self.span_f1(pred_results, metadata)
-        output = {"loss": loss, "results": self.span_f1.get_metric()}
-
-        if mode == "predict":
-            output["token_tags"] = pred_tags
+        output = {}
+        if mode == "prediction":
+            output["tags"] = pred_results
+        if tags is not None:
+            loss = -self.crf_layer(token_scores, tags, mask) / float(batch_size)            
+            self.span_f1(pred_results, metadata)
+            output["loss"] = loss
+            output["results"] = self.span_f1.get_metric()
         return output
 
     def predict_tags(self, batch, device="cuda:0"):
@@ -211,9 +226,6 @@ class NERBaseAnnotator(pl.LightningModule):
         )
         batch = tokens, tags, mask, token_mask, metadata
 
-        pred_tags = self.perform_forward_step(batch, mode="predict")["token_tags"]
-        tag_results = [
-            compress(pred_tags_, mask_)
-            for pred_tags_, mask_ in zip(pred_tags, token_mask)
-        ]
-        return tag_results
+        pred_tags = self.perform_forward_step(batch, mode="prediction")["tags"]
+        return pred_tags
+    
