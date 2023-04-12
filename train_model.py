@@ -17,11 +17,13 @@ def main(
     out_dir: Path,
     model_name: str,
     encoder_model: str,
-    lr: float,
     binarize: bool = False,
     ignore_tags: List[str] = None,
-    epochs: int = 5,
+    epochs: int = 16,
+    lr: float = 1e-5,
     dropout: float = 0.1,
+    weight_decay: float = 0.01,
+    grad_norm: float = 1.0,
     batch_size: int = 16,
 ) -> None:
     ignore_tags = set(ignore_tags) if len(ignore_tags) > 0 else None
@@ -47,11 +49,12 @@ def main(
         num_training_steps=num_training_steps,
         num_warmup_steps=num_warmup_steps,
         dropout_rate=dropout,
+        weight_decay=weight_decay,
         stage="training",
     )
 
     trainer = train_model(
-        model=model, datamodule=datamodule, out_dir=out_dir_path, epochs=epochs
+        model=model, datamodule=datamodule, out_dir=out_dir_path, epochs=epochs, grad_norm=grad_norm
     )
 
     # use pytorch lightnings saver here.

@@ -3,7 +3,6 @@ from pathlib import Path
 import time
 from typing import Any, Mapping, Tuple
 
-import torch
 from lightning.pytorch import seed_everything, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 import optuna
@@ -35,7 +34,7 @@ def write_eval_performance(eval_performance, out_file):
     logger.info("Finished writing evaluation performance for {}".format(out_file))
 
 
-def load_model(model_file, tag_to_id=None, stage="test"):
+def load_model(model_file, tag_to_id=None, stage="prediction"):
     if ~os.path.isfile(model_file):
         model_file = get_models_for_evaluation(model_file)
 
@@ -67,6 +66,7 @@ def train_model(
     datamodule: OrdinancesDataModule,
     epochs: int,
     out_dir: Path,
+    grad_norm: float,
     metric: str = "val_MD@F1",
 ) -> Trainer:
     seed_everything(42)
@@ -75,7 +75,11 @@ def train_model(
     )
     lr_logger = LearningRateMonitor(logging_interval="step")
     trainer = Trainer(
-        max_epochs=epochs, default_root_dir=out_dir, callbacks=[es_callback, lr_logger]
+        max_epochs=epochs,
+        default_root_dir=out_dir,
+        callbacks=[es_callback, lr_logger],
+        gradient_clip_algorithm="norm",
+        gradient_clip_val=grad_norm,
     )
     trainer.fit(model, datamodule=datamodule)
     return trainer
