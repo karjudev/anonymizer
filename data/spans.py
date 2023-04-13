@@ -1,5 +1,7 @@
 from typing import List, Mapping, Tuple
 
+import torch
+
 
 def get_mappings(
     records: List[Mapping[str, int | str]],
@@ -68,14 +70,14 @@ def prodigy_to_labels(
 
 def spans_to_prodigy(
     spans: Mapping[Tuple[int, int], str],
-    offsets: List[Tuple[int, int]],
+    offsets: List[Tuple[int | torch.Tensor, int | torch.Tensor]],
     out_label: str = "O",
 ) -> List[Mapping[str, int | str]]:
     prodigy_spans = []
     for (start, end), label in spans.items():
         if label != out_label:
-            char_start = offsets[start][0].item()
-            char_end = offsets[end][1].item()
+            char_start = int(offsets[start][0])
+            char_end = int(offsets[end][1])
             prodigy_spans.append({"start": char_start, "end": char_end, "label": label})
     return prodigy_spans
 
