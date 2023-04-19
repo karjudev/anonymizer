@@ -20,7 +20,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 Example = Tuple[
     torch.Tensor,
     torch.Tensor,
-    torch.Tensor,
     Mapping[Tuple[int, int], str],
     torch.Tensor,
 ]
@@ -40,12 +39,10 @@ def encode_text(
         return_overflowing_tokens=True,
         return_offsets_mapping=True,
     )
-    for i, (input_ids, attention_mask, offset_mapping) in enumerate(
-        zip(output["input_ids"], output["attention_mask"], output["offset_mapping"])
+    for input_ids, attention_mask, offset_mapping in zip(
+        output["input_ids"], output["attention_mask"], output["offset_mapping"]
     ):
-        yield input_ids, attention_mask.type(
-            torch.bool
-        ), offset_mapping, output.word_ids(i)
+        yield input_ids, attention_mask.type(torch.bool), offset_mapping
 
 
 def _binarize_records(
@@ -91,28 +88,18 @@ class OrdinancesDataset(Dataset):
         self.__max_length = max_length
         self.__instances = []
 
-    def __compute_token_mask(self, word_ids: List[int]) -> torch.Tensor:
-        token_mask = []
-        prev_word_idx = None
-        for word_idx in word_ids:
-            token_mask.append(word_idx is not None and prev_word_idx != word_idx)
-            prev_word_idx = word_idx
-        return torch.tensor(token_mask, dtype=torch.bool)
-
     def __encode_record(
         self, text: str, entities: List[Mapping[str, int | str]]
     ) -> Iterable[Example]:
-        for input_ids, attention_mask, offsets, word_ids in encode_text(
+        for input_ids, attention_mask, offsets in encode_text(
             text, self.__tokenizer, self.__max_length
         ):
-            # True if the token is the first of its word, False otherwise
-            token_mask = self.__compute_token_mask(word_ids)
             # List of integer labels
             label_ids = prodigy_to_labels(entities, offsets, self.__label2id)
             # Dictionary of spans
             enc_spans = extract_spans(label_ids, self.__id2label)
             labels = torch.tensor(label_ids)
-            yield input_ids, attention_mask, token_mask, enc_spans, labels
+            yield input_ids, attention_mask, enc_spans, labels
 
     def read_file(self, filepath: Path) -> None:
         # Loads the raw dataset from disk
@@ -228,34 +215,33 @@ class OrdinancesDataModule(LightningDataModule):
 
     def __collate_batch(self, batch):
         batch_ = list(zip(*batch))
-        tokens, masks, token_masks, gold_spans, tags = (
+        input_ids, attention_mask, spans, labels = (
             batch_[0],
             batch_[1],
             batch_[2],
             batch_[3],
-            batch_[4],
         )
 
-        max_len = max([len(token) for token in tokens])
-        token_tensor = torch.empty(size=(len(tokens), max_len), dtype=torch.long).fill_(
-            self.pad_token_id
+        max_len = max([len(token) for token in input_ids])
+        input_ids_tensor = torch.empty(
+            size=(len(input_ids), max_len), dtype=torch.long
+        ).fill_(self.pad_token_id)
+        labels_tensor = torch.empty(
+            size=(len(input_ids), max_len), dtype=torch.long
+        ).fill_(self.tag_to_id["O"])
+        attention_mask_tensor = torch.zeros(
+            size=(len(input_ids), max_len), dtype=torch.bool
         )
-        tag_tensor = torch.empty(size=(len(tokens), max_len), dtype=torch.long).fill_(
-            self.tag_to_id["O"]
-        )
-        mask_tensor = torch.zeros(size=(len(tokens), max_len), dtype=torch.bool)
-        token_masks_tensor = torch.zeros(size=(len(tokens), max_len), dtype=torch.bool)
 
-        for i in range(len(tokens)):
-            tokens_ = tokens[i]
+        for i in range(len(input_ids)):
+            tokens_ = input_ids[i]
             seq_len = len(tokens_)
 
-            token_tensor[i, :seq_len] = tokens_
-            tag_tensor[i, :seq_len] = tags[i]
-            mask_tensor[i, :seq_len] = masks[i]
-            token_masks_tensor[i, :seq_len] = token_masks[i]
+            input_ids_tensor[i, :seq_len] = tokens_
+            labels_tensor[i, :seq_len] = labels[i]
+            attention_mask_tensor[i, :seq_len] = attention_mask[i]
 
-        return token_tensor, tag_tensor, mask_tensor, token_masks_tensor, gold_spans
+        return input_ids_tensor, attention_mask_tensor, spans, labels_tensor
 
     def __get_dataloader(self, dataset: OrdinancesDataset) -> DataLoader:
         return DataLoader(

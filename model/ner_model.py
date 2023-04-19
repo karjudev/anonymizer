@@ -157,18 +157,20 @@ class NERBaseAnnotator(pl.LightningModule):
             prog_bar=True,
             logger=True,
         )
-    
+
     def forward(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        tags: Optional[Dict[Tuple[int, int], str]] = None,
+        spans: Optional[Dict[Tuple[int, int], str]] = None,
         labels: Optional[torch.Tensor] = None,
         mode: str = "prediction",
     ) -> torch.Tensor:
         batch_size = input_ids.size(0)
 
-        embedded_text_input = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        embedded_text_input = self.encoder(
+            input_ids=input_ids, attention_mask=attention_mask
+        )
         embedded_text_input = embedded_text_input.last_hidden_state
         embedded_text_input = self.dropout(F.leaky_relu(embedded_text_input))
 
@@ -181,20 +183,20 @@ class NERBaseAnnotator(pl.LightningModule):
             token_scores=token_scores,
             mask=attention_mask,
             tags=labels,
-            metadata=tags,
+            metadata=spans,
             batch_size=batch_size,
             mode=mode,
         )
         return output
 
     def perform_forward_step(self, batch, mode=""):
-        tokens, tags, mask, token_mask, metadata = batch
+        input_ids, attention_mask, spans, labels = batch
         output = self(
-            input_ids=tokens,
-            attention_mask=mask,
-            tags=metadata,
-            labels=tags,
-            mode=mode
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            spans=spans,
+            labels=labels,
+            mode=mode,
         )
         return output
 
@@ -210,22 +212,20 @@ class NERBaseAnnotator(pl.LightningModule):
         if mode == "prediction":
             output["tags"] = pred_results
         if tags is not None:
-            loss = -self.crf_layer(token_scores, tags, mask) / float(batch_size)            
+            loss = -self.crf_layer(token_scores, tags, mask) / float(batch_size)
             self.span_f1(pred_results, metadata)
             output["loss"] = loss
             output["results"] = self.span_f1.get_metric()
         return output
 
     def predict_tags(self, batch, device="cuda:0"):
-        tokens, tags, mask, token_mask, metadata = batch
-        tokens, mask, token_mask, tags = (
-            tokens.to(device),
-            mask.to(device),
-            token_mask.to(device),
-            tags.to(device),
+        input_ids, attention_mask, spans, labels = batch
+        input_ids, attention_mask, spans, labels = (
+            input_ids.to(device),
+            attention_mask.to(device),
+            labels.to(device),
         )
-        batch = tokens, tags, mask, token_mask, metadata
+        batch = input_ids, attention_mask, spans, labels
 
         pred_tags = self.perform_forward_step(batch, mode="prediction")["tags"]
         return pred_tags
-    
