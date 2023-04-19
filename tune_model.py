@@ -23,7 +23,6 @@ def main(
         directory=data_directory,
         binarize=binarize,
         tokenizer=tokenizer,
-        stage="training",
         batch_size=batch_size,
         ignore_tags=ignore_tags,
     )

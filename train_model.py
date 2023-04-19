@@ -5,10 +5,12 @@ import typer
 from transformers import AutoTokenizer
 from data.ordinances import OrdinancesDataModule
 from model.ner_model import NERBaseAnnotator
+from log import logger
 
 from utils.utils import (
     train_model,
     save_model,
+    write_eval_performance,
 )
 
 
@@ -36,7 +38,6 @@ def main(
         data_directory,
         binarize=binarize,
         tokenizer=tokenizer,
-        stage="training",
         ignore_tags=ignore_tags,
         batch_size=batch_size,
     )
@@ -54,7 +55,11 @@ def main(
     )
 
     trainer = train_model(
-        model=model, datamodule=datamodule, out_dir=out_dir_path, epochs=epochs, grad_norm=grad_norm
+        model=model,
+        datamodule=datamodule,
+        out_dir=out_dir_path,
+        epochs=epochs,
+        grad_norm=grad_norm,
     )
 
     # use pytorch lightnings saver here.
@@ -64,9 +69,17 @@ def main(
         model_name=model_name,
         timestamp=timestamp,
     )
-    typer.echo(f"Model saved in {out_model_path}")
+    logger.info(f"Model saved in {out_model_path}")
+    # Evaluates the model on validation and evaluation set
+    path = out_dir_path / "val_metrics.tsv"
+    out = trainer.test(model=model, dataloaders=datamodule.val_dataloader())
+    write_eval_performance(out, path)
+    logger.info(f"Validation metrics saved on {path}")
+    path = out_dir_path / "eval_metrics.tsv"
+    out = trainer.test(model=model, dataloaders=datamodule.eval_dataloader())
+    write_eval_performance(out, path)
+    logger.info(f"Evaluation metrics saved on {path}")
 
 
 if __name__ == "__main__":
-
     typer.run(main)
