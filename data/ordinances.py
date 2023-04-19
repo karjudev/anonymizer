@@ -119,12 +119,12 @@ class OrdinancesDataset(Dataset):
         logger.info(f"Reading file {filepath}")
         records = list(srsly.read_jsonl(filepath))
         logger.info(f"Read {len(records)} text records from {filepath}")
+        if self.__ignore_tags is not None:
+            records = _discard_tags(records, self.__ignore_tags)
+            logger.info(f"Tags {self.__ignore_tags} discarded")
         if self.__binarize:
             records = _binarize_records(records)
             logger.info("Dataset binarized")
-        elif self.__ignore_tags is not None:
-            records = _discard_tags(records, self.__ignore_tags)
-            logger.info(f"Tags {self.__ignore_tags} discarded")
         if self.__label2id is None and self.__id2label is None:
             self.__label2id, self.__id2label = get_mappings(records)
             logger.info(
@@ -180,7 +180,6 @@ class OrdinancesDataModule(LightningDataModule):
         directory: Path,
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
-        stage: Literal["training", "evaluation", "prediction"],
         ignore_tags: Set[str] = None,
         batch_size: int = 16,
         num_gpus: int = 1,
@@ -204,24 +203,20 @@ class OrdinancesDataModule(LightningDataModule):
         # Extracts Label to ID mapping
         self.tag_to_id = self.training.get_target_vocab()
         # Loads tuning and validation
-        self.validation = None
-        self.evaluation = None
-        if stage == "training":
-            self.validation = OrdinancesDataset.from_file(
-                directory / validation_filename,
-                binarize,
-                tokenizer,
-                ignore_tags,
-                self.tag_to_id,
-            )
-        elif stage == "evaluation":
-            self.evaluation = OrdinancesDataset.from_file(
-                directory / evaluation_filename,
-                binarize,
-                tokenizer,
-                ignore_tags,
-                self.tag_to_id,
-            )
+        self.validation = OrdinancesDataset.from_file(
+            directory / validation_filename,
+            binarize,
+            tokenizer,
+            ignore_tags,
+            self.tag_to_id,
+        )
+        self.evaluation = OrdinancesDataset.from_file(
+            directory / evaluation_filename,
+            binarize,
+            tokenizer,
+            ignore_tags,
+            self.tag_to_id,
+        )
 
     def num_training_steps(
         self, epochs: int, fraction: float = 0.01
@@ -275,11 +270,7 @@ class OrdinancesDataModule(LightningDataModule):
         return self.__get_dataloader(self.training)
 
     def val_dataloader(self) -> DataLoader:
-        if self.validation is None:
-            raise ValueError("We are in evaluation mode, use `eval_dataloader`")
         return self.__get_dataloader(self.validation)
 
     def eval_dataloader(self) -> DataLoader:
-        if self.evaluation is None:
-            raise ValueError("We are in training mode, use `val_dataloader`")
         return self.__get_dataloader(self.evaluation)
