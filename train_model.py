@@ -45,7 +45,7 @@ def main(
     num_training_steps, num_warmup_steps = datamodule.num_training_steps(epochs)
     model = NERBaseAnnotator(
         encoder_model=encoder_model,
-        tag_to_id=datamodule.tag_to_id,
+        label2id=datamodule.label2id,
         lr=lr,
         num_training_steps=num_training_steps,
         num_warmup_steps=num_warmup_steps,

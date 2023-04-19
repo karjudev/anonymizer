@@ -1,35 +1,38 @@
-from typing import List, Mapping, Tuple
+from typing import List, Mapping, Set, Tuple
 
 import torch
 
 
-def get_mappings(
-    records: List[Mapping[str, int | str]],
-) -> Tuple[Mapping[str, int], Mapping[int, str]]:
-    """Computes the mappings from label to ID and from ID to label.
+MULTICLASS_LABEL2ID = {
+    "O": 0,
+    "B-LOC": 1,
+    "I-LOC": 2,
+    "B-MISC": 3,
+    "I-MISC": 4,
+    "B-ORG": 5,
+    "I-ORG": 6,
+    "B-PER": 7,
+    "I-PER": 8,
+    "B-TIME": 9,
+    "I-TIME": 10,
+}
 
-    :param records: Records to scan.
-    :type records: List[Mapping[str, int | str]]
-    :return: Unique number of labels, mappings from labels to IDs and from IDs to labels
-    :rtype: Tuple[Mapping[str, int], Mapping[int, str]]
-    """
-    # Unique labels in the dataset
-    unique_labels = set(
-        span["label"] for sentence in records for span in sentence["entities"]
-    )
-    # Set of prefixes for the IOB schema
-    prefixes = ["B", "I"]
-    # Mappings
-    label2id = {"O": 0}
-    id2label = {0: "O"}
-    i = 1
-    for label in sorted(unique_labels):
-        for prefix in prefixes:
-            iob_label = f"{prefix}-{label}"
-            label2id[iob_label] = i
-            id2label[i] = iob_label
-            i += 1
-    return label2id, id2label
+
+BINARIZED_LABEL2ID = {"O": 0, "B-OMISSIS": 1, "I-OMISSIS": 2}
+
+
+def get_label2id(binarize: bool, ignore_tags: Set[str] = None) -> Mapping[str, int]:
+    if binarize:
+        return BINARIZED_LABEL2ID
+    label2id = MULTICLASS_LABEL2ID
+    if ignore_tags is not None:
+        label2id = {
+            key: i
+            for i, key in enumerate(
+                key for key in label2id.keys() if key[2:] not in ignore_tags
+            )
+        }
+    return label2id
 
 
 def prodigy_to_labels(
@@ -37,17 +40,6 @@ def prodigy_to_labels(
     offsets: List[Tuple[int, int]],
     label2id: Mapping[str, int],
 ) -> List[int]:
-    """Converts a list of Prodigy-style charachter-encoded spans to a list of IOB labels.
-
-    :param spans: List of char-indexed spans in the form `{"start": ..., "end": ..., "label": ...}`. The spans are not assumed to be sorted.
-    :type spans: List[Mapping[str, int | str]]
-    :param offsets: For each token, its char mapping
-    :type offsets: List[Tuple[int, int]]
-    :param label2id: For each string label, its numerical ID.
-    :type label2id: Mapping[str, int]
-    :return: List of integer IDs.
-    :rtype: List[int]
-    """
     label_ids = [label2id["O"]] * len(offsets)
     for span in spans:
         i = 1

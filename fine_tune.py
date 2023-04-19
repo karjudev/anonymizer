@@ -35,7 +35,7 @@ def main(
         max_length=max_length,
     )
     model, model_file = load_model(
-        model_path, tag_to_id=get_tagset(iob_tagging), stage="finetune"
+        model_path, label2id=get_tagset(iob_tagging), stage="finetune"
     )
     model.train_data = train_data
 

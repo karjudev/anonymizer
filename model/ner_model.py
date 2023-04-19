@@ -22,7 +22,7 @@ class NERBaseAnnotator(pl.LightningModule):
     def __init__(
         self,
         encoder_model: str,
-        tag_to_id: Dict[str, int],
+        label2id: Dict[str, int],
         lr: float,
         num_training_steps: int,
         num_warmup_steps: int,
@@ -32,8 +32,8 @@ class NERBaseAnnotator(pl.LightningModule):
     ):
         super(NERBaseAnnotator, self).__init__()
 
-        self.id_to_tag = {v: k for k, v in tag_to_id.items()}
-        self.tag_to_id = tag_to_id
+        self.id_to_tag = {v: k for k, v in label2id.items()}
+        self.label2id = label2id
 
         self.stage = stage
         target_size = len(self.id_to_tag)
@@ -55,7 +55,7 @@ class NERBaseAnnotator(pl.LightningModule):
         self.dropout = nn.Dropout(dropout_rate)
 
         self.span_f1 = SpanF1()
-        self.save_hyperparameters(ignore="tag_to_id")
+        self.save_hyperparameters(ignore="label2id")
         self.training_outputs = []
         self.validation_outputs = []
         self.testing_outputs = []

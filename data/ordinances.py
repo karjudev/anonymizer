@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Iterable, List, Literal, Mapping, Optional, Set, Tuple
+from typing import Iterable, List, Mapping, Optional, Set, Tuple
 
 import torch
 from log import logger
@@ -9,7 +9,7 @@ from lightning.pytorch import LightningDataModule
 import srsly
 from transformers import PreTrainedTokenizer
 
-from data.spans import extract_spans, get_mappings, prodigy_to_labels
+from data.spans import extract_spans, get_label2id, prodigy_to_labels
 
 
 # Disable parallel tokenizers
@@ -72,19 +72,14 @@ class OrdinancesDataset(Dataset):
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
         ignore_tags: Set[str] = None,
-        label2id: Optional[Mapping[str, int]] = None,
         max_length: int = 512,
     ) -> None:
         super().__init__()
         self.__binarize = binarize
         self.__ignore_tags = ignore_tags
         self.__tokenizer = tokenizer
-        self.__label2id = label2id
-        self.__id2label = (
-            None
-            if label2id is None
-            else {idx: label for label, idx in label2id.items()}
-        )
+        self.__label2id = get_label2id(binarize, ignore_tags)
+        self.__id2label = {idx: label for label, idx in self.__label2id.items()}
         self.__max_length = max_length
         self.__instances = []
 
@@ -112,26 +107,12 @@ class OrdinancesDataset(Dataset):
         if self.__binarize:
             records = _binarize_records(records)
             logger.info("Dataset binarized")
-        if self.__label2id is None and self.__id2label is None:
-            self.__label2id, self.__id2label = get_mappings(records)
-            logger.info(
-                f"Mappings correctly computed. We have {len(self.__label2id)} tags to predict"
-            )
         # Starts the true encoding
         for record in records:
             self.__instances.extend(
                 self.__encode_record(record["text"], record["entities"])
             )
         logger.info(f"{len(self.__instances)} instances obtained from {filepath}")
-
-    def get_target_vocab(self) -> Mapping[str, int]:
-        if self.__label2id is None:
-            raise ValueError("Call `read_file` before accessing this method")
-        return self.__label2id
-
-    def get_target_size(self) -> int:
-        vocab = self.get_target_vocab()
-        return len(vocab.values())
 
     def __len__(self) -> int:
         length = len(self.__instances)
@@ -151,12 +132,9 @@ class OrdinancesDataset(Dataset):
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
         ignore_tags: Set[str] = None,
-        label2id: Optional[Mapping[str, int]] = None,
         max_length: int = 512,
     ) -> "OrdinancesDataset":
-        dataset = OrdinancesDataset(
-            binarize, tokenizer, ignore_tags, label2id, max_length
-        )
+        dataset = OrdinancesDataset(binarize, tokenizer, ignore_tags, max_length)
         dataset.read_file(filepath)
         return dataset
 
@@ -179,30 +157,27 @@ class OrdinancesDataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_gpus = num_gpus
         self.num_workers = num_workers
-        # Gets padding and separation token
-        self.pad_token = tokenizer.special_tokens_map["pad_token"]
-        self.pad_token_id = tokenizer.get_vocab()[self.pad_token]
-        self.sep_token = tokenizer.special_tokens_map["sep_token"]
+        # Gets padding token
+        pad_token = tokenizer.special_tokens_map["pad_token"]
+        self.pad_token_id = tokenizer.get_vocab()[pad_token]
+        # Extracts Label to ID mapping
+        self.label2id = get_label2id(binarize, ignore_tags)
         # Loads training first
         self.training = OrdinancesDataset.from_file(
             directory / training_filename, binarize, tokenizer, ignore_tags
         )
-        # Extracts Label to ID mapping
-        self.tag_to_id = self.training.get_target_vocab()
         # Loads tuning and validation
         self.validation = OrdinancesDataset.from_file(
             directory / validation_filename,
             binarize,
             tokenizer,
             ignore_tags,
-            self.tag_to_id,
         )
         self.evaluation = OrdinancesDataset.from_file(
             directory / evaluation_filename,
             binarize,
             tokenizer,
             ignore_tags,
-            self.tag_to_id,
         )
 
     def num_training_steps(
@@ -228,7 +203,7 @@ class OrdinancesDataModule(LightningDataModule):
         ).fill_(self.pad_token_id)
         labels_tensor = torch.empty(
             size=(len(input_ids), max_len), dtype=torch.long
-        ).fill_(self.tag_to_id["O"])
+        ).fill_(self.label2id["O"])
         attention_mask_tensor = torch.zeros(
             size=(len(input_ids), max_len), dtype=torch.bool
         )

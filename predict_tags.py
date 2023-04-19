@@ -26,7 +26,7 @@ def main(
         max_length=max_length,
     )
 
-    model, model_file = load_model(model, tag_to_id=get_tagset(iob_tagging))
+    model, model_file = load_model(model, label2id=get_tagset(iob_tagging))
     model = model.to(cuda)
     # use pytorch lightnings saver here.
     eval_file = get_out_filename(out_dir, model_file, prefix=prefix)
@@ -48,6 +48,7 @@ def main(
             out_str += "\n\n\n"
         index += 1
     open(eval_file, "wt").write(out_str)
+
 
 if __name__ == "__main__":
     typer.run(main)

@@ -21,7 +21,7 @@ def main(
     tokenizer = AutoTokenizer.from_pretrained(encoder_model)
     datamodule = OrdinancesDataModule(data_dir, binarize, tokenizer, ignore_tags)
 
-    model, _ = load_model(str(model_dir), tag_to_id=datamodule.tag_to_id)
+    model, _ = load_model(str(model_dir), label2id=datamodule.label2id)
     trainer = Trainer(enable_checkpointing=False)
     logger.info("Testing validation set")
     trainer.test(model, dataloaders=datamodule.val_dataloader())
