@@ -21,7 +21,8 @@ def _read_wikiner(path: Path) -> Iterator[Mapping[str, List[str]]]:
                 token, label = parts[0], parts[-1]
                 tokens.append(token)
                 labels.append(label)
-            yield {"tokens": tokens, "labels": labels}
+            if len(tokens) > 0 and len(labels) > 0:
+                yield {"tokens": tokens, "labels": labels}
 
 
 def _filter_labels(
@@ -32,6 +33,17 @@ def _filter_labels(
             label = record["labels"][i]
             if label[2:] not in labels:
                 record["labels"][i] = out_label
+        yield record
+
+
+def _remove_tagging(
+    records: Iterable[Mapping[str, List[str]]], out_label: str = "O"
+) -> Iterator[Mapping[str, List[str]]]:
+    for record in records:
+        for i in range(len(record["labels"])):
+            label = record["labels"][i]
+            if label != out_label:
+                record["labels"][i] = label[2:]
         yield record
 
 
@@ -50,9 +62,11 @@ def wikiner(
     else:
         accepted_labels = set(accepted_labels)
     # Reads and parses the WikiNER records from file
-    records = list(_read_wikiner(filepath))
+    records = _read_wikiner(filepath)
+    # Removes the incorrect IOB tagging and re-adds it
+    records = _add_iob_tagging(_remove_tagging(records))
     # Filters the accepted labels
-    records = _filter_labels(records, accepted_labels)
+    records = list(_filter_labels(records, accepted_labels))
     # Splits them random into training and validation
     training, validation = train_test_split(
         records, test_size=validation_proportion, random_state=random_state
