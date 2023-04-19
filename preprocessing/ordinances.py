@@ -80,7 +80,7 @@ def strip_alphanumeric_spans(
     return record
 
 
-def preprocess(
+def clean_records(
     records: List[Mapping[str, int | str]], strip_alphanum: bool, merge_contiguous: bool
 ) -> Iterator[Mapping[str, int | str]]:
     for record in records:
@@ -100,7 +100,7 @@ def clean(
 ) -> None:
     assert str(in_filepath.absolute()) != str(out_filepath.absolute())
     input_stream = srsly.read_jsonl(in_filepath)
-    output_stream = preprocess(input_stream, strip_alphanum, merge_contiguous)
+    output_stream = clean_records(input_stream, strip_alphanum, merge_contiguous)
     srsly.write_jsonl(out_filepath, output_stream)
 
 
