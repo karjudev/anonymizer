@@ -11,11 +11,12 @@ def main(
     data_directory: Path,
     encoder_model: str,
     binarize: bool = False,
+    heuristic_dates: bool = False,
     ignore_tags: List[str] = None,
     epochs: int = 3,
     batch_size: int = 16,
 ) -> None:
-    ignore_tags = set(ignore_tags) if len(ignore_tags) > 0 else None
+    ignore_tags = set(ignore_tags)
     # Loads the tokenizer
     tokenizer = AutoTokenizer.from_pretrained(encoder_model)
     # load the dataset first
@@ -23,6 +24,7 @@ def main(
         directory=data_directory,
         binarize=binarize,
         tokenizer=tokenizer,
+        heuristic_dates=heuristic_dates,
         batch_size=batch_size,
         ignore_tags=ignore_tags,
     )

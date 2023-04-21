@@ -19,6 +19,7 @@ def main(
     out_dir: Path,
     model_name: str,
     encoder_model: str,
+    heuristic_dates: bool = False,
     binarize: bool = False,
     ignore_tags: List[str] = None,
     epochs: int = 16,
@@ -28,7 +29,7 @@ def main(
     grad_norm: float = 1.0,
     batch_size: int = 16,
 ) -> None:
-    ignore_tags = set(ignore_tags) if len(ignore_tags) > 0 else None
+    ignore_tags = set(ignore_tags)
     timestamp = time.time()
     out_dir_path = out_dir / model_name
     # Loads the tokenizer
@@ -38,6 +39,7 @@ def main(
         data_directory,
         binarize=binarize,
         tokenizer=tokenizer,
+        heuristic_dates=heuristic_dates,
         ignore_tags=ignore_tags,
         batch_size=batch_size,
     )
@@ -45,7 +47,8 @@ def main(
     num_training_steps, num_warmup_steps = datamodule.num_training_steps(epochs)
     model = NERBaseAnnotator(
         encoder_model=encoder_model,
-        label2id=datamodule.label2id,
+        label2id_full=datamodule.label2id_full,
+        label2id_filtered=datamodule.label2id_filtered,
         lr=lr,
         num_training_steps=num_training_steps,
         num_warmup_steps=num_warmup_steps,

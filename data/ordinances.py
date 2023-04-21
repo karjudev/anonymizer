@@ -3,13 +3,19 @@ from pathlib import Path
 from typing import Iterable, List, Mapping, Optional, Set, Tuple
 
 import torch
+from heuristics.date import detect_dates
 from log import logger
 from torch.utils.data import Dataset, DataLoader
 from lightning.pytorch import LightningDataModule
 import srsly
 from transformers import PreTrainedTokenizer
 
-from data.spans import extract_spans, get_label2id, prodigy_to_labels
+from data.spans import (
+    extract_spans,
+    get_label2id,
+    discard_label2id,
+    prodigy_to_labels,
+)
 
 
 # Disable parallel tokenizers
@@ -20,6 +26,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 Example = Tuple[
     torch.Tensor,
     torch.Tensor,
+    List[int],
     Mapping[Tuple[int, int], str],
     torch.Tensor,
 ]
@@ -45,24 +52,37 @@ def encode_text(
         yield input_ids, attention_mask.type(torch.bool), offset_mapping
 
 
+def _binarize(
+    entities: Mapping[str, int | str], label: str = "OMISSIS"
+) -> Mapping[str, int | str]:
+    for entity in entities:
+        entity["label"] = label
+    return entities
+
+
 def _binarize_records(
     records: List[Mapping[str, int | str]], label: str = "OMISSIS"
 ) -> List[Mapping[int, int | str]]:
     for record in records:
-        for entity in record["entities"]:
-            entity["label"] = label
+        record["entities"] = _binarize(record["entities"], label)
     return records
+
+
+def _discard(
+    entities: Mapping[str, int | str], tags: Set[str]
+) -> Mapping[str, int | str]:
+    filtered_entities = []
+    for entity in entities:
+        if entity["label"] not in tags:
+            filtered_entities.append(entity)
+    return filtered_entities
 
 
 def _discard_tags(
     records: List[Mapping[str, int | str]], tags: Set[str]
 ) -> List[Mapping[int, int | str]]:
     for record in records:
-        filtered_entities = []
-        for entity in record["entities"]:
-            if entity["label"] not in tags:
-                filtered_entities.append(entity)
-        record["entities"] = filtered_entities
+        record["entities"] = _discard(record["entities"], tags)
     return records
 
 
@@ -71,42 +91,73 @@ class OrdinancesDataset(Dataset):
         self,
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
-        ignore_tags: Set[str] = None,
+        heuristic_dates: bool,
+        ignore_labels: Set[str] = None,
         max_length: int = 512,
     ) -> None:
         super().__init__()
         self.__binarize = binarize
-        self.__ignore_tags = ignore_tags
+        self.__heuristic_dates = heuristic_dates
+        self.__ignore_labels = ignore_labels
+        # Set of labels handled by the heuristics and non the ML model
+        self.__filter_labels = set()
+        if heuristic_dates:
+            self.__filter_labels.add("TIME")
+
+        self.label2id_full = get_label2id(binarize)
+        self.__id2label_full = {idx: label for label, idx in self.label2id_full.items()}
+        self.label2id_filtered = discard_label2id(
+            self.label2id_full, self.__filter_labels.union(self.__ignore_labels)
+        )
+
         self.__tokenizer = tokenizer
-        self.__label2id = get_label2id(binarize, ignore_tags)
-        self.__id2label = {idx: label for label, idx in self.__label2id.items()}
         self.__max_length = max_length
+
         self.__instances = []
+
+    def __compute_heuristics(self, text: str) -> List[Mapping[str, int | str]]:
+        prodigy_spans = []
+        if self.__heuristic_dates:
+            prodigy_spans = detect_dates(text, self.__binarize)
+        return prodigy_spans
 
     def __encode_record(
         self, text: str, entities: List[Mapping[str, int | str]]
     ) -> Iterable[Example]:
+        # Filters out entities computed with the heuristics
+        filtered_entities = _discard(entities, self.__filter_labels)
+        # Optionally binarizes the entities
+        if self.__binarize:
+            entities = _binarize(entities)
+            filtered_entities = _binarize(filtered_entities)
+        # Detects entities with heuristics
+        heuristic_prodigy_spans = self.__compute_heuristics(text)
         for input_ids, attention_mask, offsets in encode_text(
             text, self.__tokenizer, self.__max_length
         ):
             # List of integer labels
-            label_ids = prodigy_to_labels(entities, offsets, self.__label2id)
+            label_ids = prodigy_to_labels(entities, offsets, self.label2id_full)
+            # List of filtered integer labels (used solely for the loss of ML models)
+            label_ids_filtered = prodigy_to_labels(
+                filtered_entities, offsets, self.label2id_filtered
+            )
+            # If no heuristics are used, this is a full "O" list
+            heuristic_ids = prodigy_to_labels(
+                heuristic_prodigy_spans, offsets, self.label2id_full
+            )
             # Dictionary of spans
-            enc_spans = extract_spans(label_ids, self.__id2label)
-            labels = torch.tensor(label_ids)
-            yield input_ids, attention_mask, enc_spans, labels
+            enc_spans = extract_spans(label_ids, self.__id2label_full)
+            labels = torch.tensor(label_ids_filtered)
+            yield input_ids, attention_mask, heuristic_ids, enc_spans, labels
 
     def read_file(self, filepath: Path) -> None:
         # Loads the raw dataset from disk
         logger.info(f"Reading file {filepath}")
         records = list(srsly.read_jsonl(filepath))
         logger.info(f"Read {len(records)} text records from {filepath}")
-        if self.__ignore_tags is not None:
-            records = _discard_tags(records, self.__ignore_tags)
-            logger.info(f"Tags {self.__ignore_tags} discarded")
-        if self.__binarize:
-            records = _binarize_records(records)
-            logger.info("Dataset binarized")
+        if len(self.__ignore_labels) > 0:
+            records = _discard_tags(records, self.__ignore_labels)
+            logger.info(f"Tags {self.__ignore_labels} discarded")
         # Starts the true encoding
         for record in records:
             self.__instances.extend(
@@ -131,10 +182,13 @@ class OrdinancesDataset(Dataset):
         filepath: Path,
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
+        heuristic_dates: bool,
         ignore_tags: Set[str] = None,
         max_length: int = 512,
     ) -> "OrdinancesDataset":
-        dataset = OrdinancesDataset(binarize, tokenizer, ignore_tags, max_length)
+        dataset = OrdinancesDataset(
+            binarize, tokenizer, heuristic_dates, ignore_tags, max_length
+        )
         dataset.read_file(filepath)
         return dataset
 
@@ -145,6 +199,7 @@ class OrdinancesDataModule(LightningDataModule):
         directory: Path,
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
+        heuristic_dates: bool,
         ignore_tags: Set[str] = None,
         batch_size: int = 16,
         num_gpus: int = 1,
@@ -160,25 +215,32 @@ class OrdinancesDataModule(LightningDataModule):
         # Gets padding token
         pad_token = tokenizer.special_tokens_map["pad_token"]
         self.pad_token_id = tokenizer.get_vocab()[pad_token]
-        # Extracts Label to ID mapping
-        self.label2id = get_label2id(binarize, ignore_tags)
         # Loads training first
         self.training = OrdinancesDataset.from_file(
-            directory / training_filename, binarize, tokenizer, ignore_tags
+            directory / training_filename,
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            ignore_tags,
         )
         # Loads tuning and validation
         self.validation = OrdinancesDataset.from_file(
             directory / validation_filename,
             binarize,
             tokenizer,
+            heuristic_dates,
             ignore_tags,
         )
         self.evaluation = OrdinancesDataset.from_file(
             directory / evaluation_filename,
             binarize,
             tokenizer,
+            heuristic_dates,
             ignore_tags,
         )
+        # Extracts Label to ID mappings
+        self.label2id_full = self.training.label2id_full
+        self.label2id_filtered = self.training.label2id_filtered
 
     def num_training_steps(
         self, epochs: int, fraction: float = 0.01
@@ -190,33 +252,40 @@ class OrdinancesDataModule(LightningDataModule):
 
     def __collate_batch(self, batch):
         batch_ = list(zip(*batch))
-        input_ids, attention_mask, spans, labels = (
+        input_ids, attention_mask, heuristics, spans, labels = (
             batch_[0],
             batch_[1],
             batch_[2],
             batch_[3],
+            batch_[4],
         )
 
         max_len = max([len(token) for token in input_ids])
         input_ids_tensor = torch.empty(
             size=(len(input_ids), max_len), dtype=torch.long
         ).fill_(self.pad_token_id)
-        labels_tensor = torch.empty(
-            size=(len(input_ids), max_len), dtype=torch.long
-        ).fill_(self.label2id["O"])
         attention_mask_tensor = torch.zeros(
             size=(len(input_ids), max_len), dtype=torch.bool
         )
+        labels_tensor = torch.empty(
+            size=(len(input_ids), max_len), dtype=torch.long
+        ).fill_(self.label2id_full["O"])
 
         for i in range(len(input_ids)):
             tokens_ = input_ids[i]
             seq_len = len(tokens_)
 
             input_ids_tensor[i, :seq_len] = tokens_
-            labels_tensor[i, :seq_len] = labels[i]
             attention_mask_tensor[i, :seq_len] = attention_mask[i]
+            labels_tensor[i, :seq_len] = labels[i]
 
-        return input_ids_tensor, attention_mask_tensor, spans, labels_tensor
+        return (
+            input_ids_tensor,
+            attention_mask_tensor,
+            heuristics,
+            spans,
+            labels_tensor,
+        )
 
     def __get_dataloader(self, dataset: OrdinancesDataset) -> DataLoader:
         return DataLoader(

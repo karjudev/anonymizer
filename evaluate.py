@@ -17,11 +17,11 @@ def main(
     binarize: bool = False,
     ignore_tags: List[str] = None,
 ) -> None:
-    ignore_tags = set(ignore_tags) if len(ignore_tags) > 0 else None
+    ignore_tags = set(ignore_tags)
     tokenizer = AutoTokenizer.from_pretrained(encoder_model)
     datamodule = OrdinancesDataModule(data_dir, binarize, tokenizer, ignore_tags)
 
-    model, _ = load_model(str(model_dir), label2id=datamodule.label2id)
+    model, _ = load_model(str(model_dir), label2id=datamodule.label2id_full)
     trainer = Trainer(enable_checkpointing=False)
     logger.info("Testing validation set")
     trainer.test(model, dataloaders=datamodule.val_dataloader())

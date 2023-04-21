@@ -93,12 +93,10 @@ def tune_model(
     metric: str = "val_MD@F1",
 ) -> Tuple[float, Mapping[str, Any]]:
     seed_everything(42)
-    # Mapping from label to ID
-    label2id = datamodule.label2id
     # Number of training and warm-up steps
     num_training_steps, num_warmup_steps = datamodule.num_training_steps(epochs)
 
-    def objective(trial):
+    def objective(trial: optuna.Trial):
         # Extracts hyperparameters
         lr = trial.suggest_float("lr", low=1e-5, high=5e-4)
         weight_decay = trial.suggest_float("weight_decay", low=0.001, high=0.01)
@@ -112,14 +110,15 @@ def tune_model(
         }
         # Creates the model
         model = NERBaseAnnotator(
-            encoder_model,
-            label2id,
-            lr,
-            num_training_steps,
-            num_warmup_steps,
-            dropout_rate,
-            stage="tuning",
+            encoder_model=encoder_model,
+            label2id_full=datamodule.label2id_full,
+            label2id_filtered=datamodule.label2id_filtered,
+            lr=lr,
+            num_training_steps=num_training_steps,
+            num_warmup_steps=num_warmup_steps,
+            dropout_rate=dropout_rate,
             weight_decay=weight_decay,
+            stage="tuning",
         )
         # Creates the trainer
         pruning_callback = PyTorchLightningPruningCallback(trial, monitor=metric)
