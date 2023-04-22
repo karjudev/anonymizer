@@ -92,22 +92,24 @@ class OrdinancesDataset(Dataset):
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
         heuristic_dates: bool,
-        ignore_labels: Set[str] = None,
+        discard_labels: Set[str],
         max_length: int = 512,
     ) -> None:
         super().__init__()
         self.__binarize = binarize
         self.__heuristic_dates = heuristic_dates
-        self.__ignore_labels = ignore_labels
+        self.__discard_labels = discard_labels
         # Set of labels handled by the heuristics and non the ML model
         self.__filter_labels = set()
         if heuristic_dates:
             self.__filter_labels.add("TIME")
 
-        self.label2id_full = get_label2id(binarize)
-        self.__id2label_full = {idx: label for label, idx in self.label2id_full.items()}
-        self.label2id_filtered = discard_label2id(
-            self.label2id_full, self.__filter_labels.union(self.__ignore_labels)
+        self.eval_label2id = discard_label2id(
+            get_label2id(binarize), self.__discard_labels
+        )
+        self.__eval_id2label = {idx: label for label, idx in self.eval_label2id.items()}
+        self.training_label2id = discard_label2id(
+            self.eval_label2id, self.__filter_labels
         )
 
         self.__tokenizer = tokenizer
@@ -122,42 +124,45 @@ class OrdinancesDataset(Dataset):
         return prodigy_spans
 
     def __encode_record(
-        self, text: str, entities: List[Mapping[str, int | str]]
+        self, text: str, eval_entities: List[Mapping[str, int | str]]
     ) -> Iterable[Example]:
         # Filters out entities computed with the heuristics
-        filtered_entities = _discard(entities, self.__filter_labels)
+        training_entities = _discard(eval_entities, self.__filter_labels)
         # Optionally binarizes the entities
         if self.__binarize:
-            entities = _binarize(entities)
-            filtered_entities = _binarize(filtered_entities)
+            eval_entities = _binarize(eval_entities)
+            training_entities = _binarize(training_entities)
         # Detects entities with heuristics
         heuristic_prodigy_spans = self.__compute_heuristics(text)
         for input_ids, attention_mask, offsets in encode_text(
             text, self.__tokenizer, self.__max_length
         ):
-            # List of integer labels
-            label_ids = prodigy_to_labels(entities, offsets, self.label2id_full)
-            # List of filtered integer labels (used solely for the loss of ML models)
-            label_ids_filtered = prodigy_to_labels(
-                filtered_entities, offsets, self.label2id_filtered
+            # List of integer labels used for evaluation
+            eval_label_ids = prodigy_to_labels(
+                eval_entities, offsets, self.eval_label2id
+            )
+            # List of training integer labels (used solely for the loss of ML models)
+            training_label_ids = prodigy_to_labels(
+                training_entities, offsets, self.training_label2id
             )
             # If no heuristics are used, this is a full "O" list
-            heuristic_ids = prodigy_to_labels(
-                heuristic_prodigy_spans, offsets, self.label2id_full
+            heuristic_label_ids = prodigy_to_labels(
+                heuristic_prodigy_spans, offsets, self.eval_label2id
             )
-            # Dictionary of spans
-            enc_spans = extract_spans(label_ids, self.__id2label_full)
-            labels = torch.tensor(label_ids_filtered)
-            yield input_ids, attention_mask, heuristic_ids, enc_spans, labels
+            # Dictionary of spans used for evaluation
+            eval_spans = extract_spans(eval_label_ids, self.__eval_id2label)
+            # Tensor of training labels
+            labels = torch.tensor(training_label_ids)
+            yield input_ids, attention_mask, heuristic_label_ids, eval_spans, labels
 
     def read_file(self, filepath: Path) -> None:
         # Loads the raw dataset from disk
         logger.info(f"Reading file {filepath}")
         records = list(srsly.read_jsonl(filepath))
         logger.info(f"Read {len(records)} text records from {filepath}")
-        if len(self.__ignore_labels) > 0:
-            records = _discard_tags(records, self.__ignore_labels)
-            logger.info(f"Tags {self.__ignore_labels} discarded")
+        if len(self.__discard_labels) > 0:
+            records = _discard_tags(records, self.__discard_labels)
+            logger.info(f"Tags {self.__discard_labels} discarded")
         # Starts the true encoding
         for record in records:
             self.__instances.extend(
@@ -183,11 +188,11 @@ class OrdinancesDataset(Dataset):
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
         heuristic_dates: bool,
-        ignore_tags: Set[str] = None,
+        discard_labels: Set[str],
         max_length: int = 512,
     ) -> "OrdinancesDataset":
         dataset = OrdinancesDataset(
-            binarize, tokenizer, heuristic_dates, ignore_tags, max_length
+            binarize, tokenizer, heuristic_dates, discard_labels, max_length
         )
         dataset.read_file(filepath)
         return dataset
@@ -200,7 +205,8 @@ class OrdinancesDataModule(LightningDataModule):
         binarize: bool,
         tokenizer: PreTrainedTokenizer,
         heuristic_dates: bool,
-        ignore_tags: Set[str] = None,
+        discard_labels: Set[str],
+        load_training: bool = True,
         batch_size: int = 16,
         num_gpus: int = 1,
         num_workers: int = 8,
@@ -216,31 +222,34 @@ class OrdinancesDataModule(LightningDataModule):
         pad_token = tokenizer.special_tokens_map["pad_token"]
         self.pad_token_id = tokenizer.get_vocab()[pad_token]
         # Loads training first
-        self.training = OrdinancesDataset.from_file(
-            directory / training_filename,
-            binarize,
-            tokenizer,
-            heuristic_dates,
-            ignore_tags,
-        )
+        if load_training:
+            self.training = OrdinancesDataset.from_file(
+                directory / training_filename,
+                binarize,
+                tokenizer,
+                heuristic_dates,
+                discard_labels,
+            )
+        else:
+            self.training = None
         # Loads tuning and validation
         self.validation = OrdinancesDataset.from_file(
             directory / validation_filename,
             binarize,
             tokenizer,
             heuristic_dates,
-            ignore_tags,
+            discard_labels,
         )
         self.evaluation = OrdinancesDataset.from_file(
             directory / evaluation_filename,
             binarize,
             tokenizer,
             heuristic_dates,
-            ignore_tags,
+            discard_labels,
         )
         # Extracts Label to ID mappings
-        self.label2id_full = self.training.label2id_full
-        self.label2id_filtered = self.training.label2id_filtered
+        self.eval_label2id = self.evaluation.eval_label2id
+        self.training_label2id = self.evaluation.training_label2id
 
     def num_training_steps(
         self, epochs: int, fraction: float = 0.01
@@ -269,7 +278,7 @@ class OrdinancesDataModule(LightningDataModule):
         )
         labels_tensor = torch.empty(
             size=(len(input_ids), max_len), dtype=torch.long
-        ).fill_(self.label2id_full["O"])
+        ).fill_(self.eval_label2id["O"])
 
         for i in range(len(input_ids)):
             tokens_ = input_ids[i]
@@ -297,6 +306,10 @@ class OrdinancesDataModule(LightningDataModule):
         )
 
     def train_dataloader(self) -> DataLoader:
+        if self.training is None:
+            raise ValueError(
+                "Set `load_training=True` when initializing the OrdinancesDataModule."
+            )
         return self.__get_dataloader(self.training)
 
     def val_dataloader(self) -> DataLoader:

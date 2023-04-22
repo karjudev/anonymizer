@@ -12,11 +12,11 @@ def main(
     encoder_model: str,
     binarize: bool = False,
     heuristic_dates: bool = False,
-    ignore_tags: List[str] = None,
+    discard_labels: List[str] = None,
     epochs: int = 3,
     batch_size: int = 16,
 ) -> None:
-    ignore_tags = set(ignore_tags)
+    discard_labels = set(discard_labels)
     # Loads the tokenizer
     tokenizer = AutoTokenizer.from_pretrained(encoder_model)
     # load the dataset first
@@ -26,7 +26,7 @@ def main(
         tokenizer=tokenizer,
         heuristic_dates=heuristic_dates,
         batch_size=batch_size,
-        ignore_tags=ignore_tags,
+        discard_labels=discard_labels,
     )
     best_value, best_params = tune_model(datamodule, encoder_model, epochs)
     typer.echo(f"Best metric {best_value} with params {best_params}")

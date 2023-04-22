@@ -14,14 +14,26 @@ def main(
     data_dir: Path,
     model_dir: Path,
     encoder_model: str,
+    heuristic_dates: bool = False,
     binarize: bool = False,
-    ignore_tags: List[str] = None,
+    discard_labels: List[str] = None,
 ) -> None:
-    ignore_tags = set(ignore_tags)
+    discard_labels = set(discard_labels)
     tokenizer = AutoTokenizer.from_pretrained(encoder_model)
-    datamodule = OrdinancesDataModule(data_dir, binarize, tokenizer, ignore_tags)
+    datamodule = OrdinancesDataModule(
+        data_dir,
+        binarize,
+        tokenizer,
+        heuristic_dates,
+        discard_labels,
+        load_training=False,
+    )
 
-    model, _ = load_model(str(model_dir), label2id=datamodule.label2id_full)
+    model, _ = load_model(
+        str(model_dir),
+        eval_label2id=datamodule.eval_label2id,
+        training_label2id=datamodule.training_label2id,
+    )
     trainer = Trainer(enable_checkpointing=False)
     logger.info("Testing validation set")
     trainer.test(model, dataloaders=datamodule.val_dataloader())

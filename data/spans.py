@@ -26,12 +26,12 @@ def get_label2id(binarize: bool) -> Mapping[str, int]:
 
 
 def discard_label2id(
-    label2id: Mapping[str, int], ignore_labels: Set[str] = None
+    label2id: Mapping[str, int], discard_labels: Set[str] = None
 ) -> Mapping[str, int]:
     return {
         label: idx
         for idx, label in enumerate(
-            key for key in label2id.keys() if key[2:] not in ignore_labels
+            key for key in label2id.keys() if key[2:] not in discard_labels
         )
     }
 

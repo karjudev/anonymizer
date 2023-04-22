@@ -34,13 +34,22 @@ def write_eval_performance(eval_performance, out_file):
     logger.info("Finished writing evaluation performance for {}".format(out_file))
 
 
-def load_model(model_file, label2id=None, stage="prediction"):
+def load_model(
+    model_file: str,
+    eval_label2id: Mapping[str, int],
+    training_label2id: Mapping[str, int],
+    stage="prediction",
+):
     if ~os.path.isfile(model_file):
         model_file = get_models_for_evaluation(model_file)
 
     hparams_file = model_file[: model_file.rindex("checkpoints/")] + "/hparams.yaml"
     model = NERBaseAnnotator.load_from_checkpoint(
-        model_file, hparams_file=hparams_file, stage=stage, label2id=label2id
+        model_file,
+        hparams_file=hparams_file,
+        eval_label2id=eval_label2id,
+        training_label2id=training_label2id,
+        stage=stage,
     )
     model.stage = stage
     return model, model_file
@@ -111,8 +120,8 @@ def tune_model(
         # Creates the model
         model = NERBaseAnnotator(
             encoder_model=encoder_model,
-            label2id_full=datamodule.label2id_full,
-            label2id_filtered=datamodule.label2id_filtered,
+            eval_label2id=datamodule.eval_label2id,
+            training_label2id=datamodule.training_label2id,
             lr=lr,
             num_training_steps=num_training_steps,
             num_warmup_steps=num_warmup_steps,

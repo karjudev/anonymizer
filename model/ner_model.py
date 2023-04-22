@@ -23,8 +23,8 @@ class NERBaseAnnotator(pl.LightningModule):
     def __init__(
         self,
         encoder_model: str,
-        label2id_full: Dict[str, int],
-        label2id_filtered: Dict[str, int],
+        eval_label2id: Dict[str, int],
+        training_label2id: Dict[str, int],
         lr: float,
         num_training_steps: int,
         num_warmup_steps: int,
@@ -34,10 +34,10 @@ class NERBaseAnnotator(pl.LightningModule):
     ):
         super(NERBaseAnnotator, self).__init__()
 
-        self.id2label_full = {v: k for k, v in label2id_full.items()}
-        self.label2id_full = label2id_full
-        self.id2label_filtered = {v: k for k, v in label2id_filtered.items()}
-        self.label2id_filtered = label2id_filtered
+        self.id2label_full = {v: k for k, v in eval_label2id.items()}
+        self.eval_label2id = eval_label2id
+        self.id2label_filtered = {v: k for k, v in training_label2id.items()}
+        self.training_label2id = training_label2id
 
         self.stage = stage
         target_size = len(self.id2label_filtered)
@@ -61,7 +61,7 @@ class NERBaseAnnotator(pl.LightningModule):
         self.dropout = nn.Dropout(dropout_rate)
 
         self.span_f1 = SpanF1()
-        self.save_hyperparameters(ignore=["label2id_full", "label2id_filtered"])
+        self.save_hyperparameters(ignore=["eval_label2id", "training_label2id"])
         self.training_outputs = []
         self.validation_outputs = []
         self.testing_outputs = []
@@ -224,7 +224,7 @@ class NERBaseAnnotator(pl.LightningModule):
         for i in range(batch_size):
             tag_seq, _ = best_path[i]
             tag_seq = merge_labels(
-                tag_seq, heuristics[i], out_idx=self.label2id_full["O"]
+                tag_seq, heuristics[i], out_idx=self.eval_label2id["O"]
             )
             pred_results.append(extract_spans(tag_seq, self.id2label_full))
         output = dict()
