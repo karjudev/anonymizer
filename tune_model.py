@@ -15,6 +15,7 @@ def main(
     discard_labels: List[str] = None,
     epochs: int = 3,
     batch_size: int = 16,
+    dates_window: int = None,
 ) -> None:
     discard_labels = set(discard_labels)
     # Loads the tokenizer
@@ -27,6 +28,7 @@ def main(
         heuristic_dates=heuristic_dates,
         batch_size=batch_size,
         discard_labels=discard_labels,
+        dates_window=dates_window,
     )
     best_value, best_params = tune_model(datamodule, encoder_model, epochs)
     typer.echo(f"Best metric {best_value} with params {best_params}")

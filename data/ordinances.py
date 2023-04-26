@@ -94,6 +94,7 @@ class OrdinancesDataset(Dataset):
         heuristic_dates: bool,
         discard_labels: Set[str],
         max_length: int = 512,
+        dates_window: Optional[int] = None,
     ) -> None:
         super().__init__()
         self.__binarize = binarize
@@ -120,7 +121,7 @@ class OrdinancesDataset(Dataset):
     def __compute_heuristics(self, text: str) -> List[Mapping[str, int | str]]:
         prodigy_spans = []
         if self.__heuristic_dates:
-            prodigy_spans = detect_dates(text, self.__binarize)
+            prodigy_spans = detect_dates(text, self.__binarize, window=40)
         return prodigy_spans
 
     def __encode_record(
@@ -190,9 +191,15 @@ class OrdinancesDataset(Dataset):
         heuristic_dates: bool,
         discard_labels: Set[str],
         max_length: int = 512,
+        dates_window: Optional[int] = None,
     ) -> "OrdinancesDataset":
         dataset = OrdinancesDataset(
-            binarize, tokenizer, heuristic_dates, discard_labels, max_length
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            max_length,
+            dates_window,
         )
         dataset.read_file(filepath)
         return dataset
@@ -207,6 +214,7 @@ class OrdinancesDataModule(LightningDataModule):
         heuristic_dates: bool,
         discard_labels: Set[str],
         load_training: bool = True,
+        dates_window: Optional[int] = None,
         batch_size: int = 16,
         num_gpus: int = 1,
         num_workers: int = 8,
@@ -229,6 +237,7 @@ class OrdinancesDataModule(LightningDataModule):
                 tokenizer,
                 heuristic_dates,
                 discard_labels,
+                dates_window=dates_window,
             )
         else:
             self.training = None
@@ -239,6 +248,7 @@ class OrdinancesDataModule(LightningDataModule):
             tokenizer,
             heuristic_dates,
             discard_labels,
+            dates_window=dates_window,
         )
         self.evaluation = OrdinancesDataset.from_file(
             directory / evaluation_filename,
@@ -246,6 +256,7 @@ class OrdinancesDataModule(LightningDataModule):
             tokenizer,
             heuristic_dates,
             discard_labels,
+            dates_window=dates_window,
         )
         # Extracts Label to ID mappings
         self.eval_label2id = self.evaluation.eval_label2id

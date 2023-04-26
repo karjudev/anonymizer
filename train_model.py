@@ -22,6 +22,7 @@ def main(
     heuristic_dates: bool = False,
     binarize: bool = False,
     discard_labels: List[str] = None,
+    dates_window: int = None,
     epochs: int = 16,
     lr: float = 1e-5,
     dropout: float = 0.1,
@@ -41,6 +42,7 @@ def main(
         tokenizer=tokenizer,
         heuristic_dates=heuristic_dates,
         discard_labels=discard_labels,
+        dates_window=dates_window,
         batch_size=batch_size,
     )
     # Loads the model
