@@ -3,7 +3,7 @@ import time
 from typing import List
 import typer
 from transformers import AutoTokenizer
-from data.ordinances import OrdinancesDataModule
+from data.ordinances import OrdinancesNERDataModule
 from model.ner_model import NERBaseAnnotator
 from log import logger
 
@@ -36,7 +36,7 @@ def main(
     # Loads the tokenizer
     tokenizer = AutoTokenizer.from_pretrained(encoder_model)
     # load the dataset first
-    datamodule = OrdinancesDataModule(
+    datamodule = OrdinancesNERDataModule(
         data_directory,
         binarize=binarize,
         tokenizer=tokenizer,

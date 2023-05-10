@@ -7,7 +7,7 @@ from lightning.pytorch import seed_everything, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 import optuna
 from optuna.pruners import MedianPruner
-from data.ordinances import OrdinancesDataModule
+from data.ordinances import OrdinancesNERDataModule
 
 from log import logger
 from model.callbacks import PyTorchLightningPruningCallback
@@ -72,7 +72,7 @@ def save_model(trainer, out_dir, model_name="", timestamp=None):
 
 def train_model(
     model: NERBaseAnnotator,
-    datamodule: OrdinancesDataModule,
+    datamodule: OrdinancesNERDataModule,
     epochs: int,
     out_dir: Path,
     grad_norm: float,
@@ -95,7 +95,7 @@ def train_model(
 
 
 def tune_model(
-    datamodule: OrdinancesDataModule,
+    datamodule: OrdinancesNERDataModule,
     encoder_model: str,
     epochs: int,
     n_trials: int = 10,

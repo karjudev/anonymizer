@@ -5,7 +5,7 @@ import typer
 from transformers import AutoTokenizer
 from lightning.pytorch import Trainer
 
-from data.ordinances import OrdinancesDataModule
+from data.ordinances import OrdinancesNERDataModule
 from utils.utils import load_model
 from log import logger
 
@@ -20,7 +20,7 @@ def main(
 ) -> None:
     discard_labels = set(discard_labels)
     tokenizer = AutoTokenizer.from_pretrained(encoder_model)
-    datamodule = OrdinancesDataModule(
+    datamodule = OrdinancesNERDataModule(
         data_dir,
         binarize,
         tokenizer,

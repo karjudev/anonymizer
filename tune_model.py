@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List
 import typer
 from transformers import AutoTokenizer
-from data.ordinances import OrdinancesDataModule
+from data.ordinances import OrdinancesNERDataModule
 
 from utils.utils import tune_model
 
@@ -21,7 +21,7 @@ def main(
     # Loads the tokenizer
     tokenizer = AutoTokenizer.from_pretrained(encoder_model)
     # load the dataset first
-    datamodule = OrdinancesDataModule(
+    datamodule = OrdinancesNERDataModule(
         directory=data_directory,
         binarize=binarize,
         tokenizer=tokenizer,

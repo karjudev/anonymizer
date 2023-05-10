@@ -9,6 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 from lightning.pytorch import LightningDataModule
 import srsly
 from transformers import PreTrainedTokenizer
+from datasets import DatasetDict, load_dataset
 
 from data.spans import (
     extract_spans,
@@ -60,14 +61,6 @@ def _binarize(
     return entities
 
 
-def _binarize_records(
-    records: List[Mapping[str, int | str]], label: str = "OMISSIS"
-) -> List[Mapping[int, int | str]]:
-    for record in records:
-        record["entities"] = _binarize(record["entities"], label)
-    return records
-
-
 def _discard(
     entities: Mapping[str, int | str], tags: Set[str]
 ) -> Mapping[str, int | str]:
@@ -86,7 +79,7 @@ def _discard_tags(
     return records
 
 
-class OrdinancesDataset(Dataset):
+class OrdinancesNERDataset(Dataset):
     def __init__(
         self,
         binarize: bool,
@@ -115,13 +108,16 @@ class OrdinancesDataset(Dataset):
 
         self.__tokenizer = tokenizer
         self.__max_length = max_length
+        self.__dates_window = dates_window
 
         self.__instances = []
 
     def __compute_heuristics(self, text: str) -> List[Mapping[str, int | str]]:
         prodigy_spans = []
         if self.__heuristic_dates:
-            prodigy_spans = detect_dates(text, self.__binarize, window=40)
+            prodigy_spans = detect_dates(
+                text, self.__binarize, window=self.__dates_window
+            )
         return prodigy_spans
 
     def __encode_record(
@@ -192,8 +188,8 @@ class OrdinancesDataset(Dataset):
         discard_labels: Set[str],
         max_length: int = 512,
         dates_window: Optional[int] = None,
-    ) -> "OrdinancesDataset":
-        dataset = OrdinancesDataset(
+    ) -> "OrdinancesNERDataset":
+        dataset = OrdinancesNERDataset(
             binarize,
             tokenizer,
             heuristic_dates,
@@ -205,7 +201,7 @@ class OrdinancesDataset(Dataset):
         return dataset
 
 
-class OrdinancesDataModule(LightningDataModule):
+class OrdinancesNERDataModule(LightningDataModule):
     def __init__(
         self,
         directory: Path,
@@ -231,7 +227,7 @@ class OrdinancesDataModule(LightningDataModule):
         self.pad_token_id = tokenizer.get_vocab()[pad_token]
         # Loads training first
         if load_training:
-            self.training = OrdinancesDataset.from_file(
+            self.training = OrdinancesNERDataset.from_file(
                 directory / training_filename,
                 binarize,
                 tokenizer,
@@ -242,7 +238,7 @@ class OrdinancesDataModule(LightningDataModule):
         else:
             self.training = None
         # Loads tuning and validation
-        self.validation = OrdinancesDataset.from_file(
+        self.validation = OrdinancesNERDataset.from_file(
             directory / validation_filename,
             binarize,
             tokenizer,
@@ -250,7 +246,7 @@ class OrdinancesDataModule(LightningDataModule):
             discard_labels,
             dates_window=dates_window,
         )
-        self.evaluation = OrdinancesDataset.from_file(
+        self.evaluation = OrdinancesNERDataset.from_file(
             directory / evaluation_filename,
             binarize,
             tokenizer,
@@ -307,7 +303,7 @@ class OrdinancesDataModule(LightningDataModule):
             labels_tensor,
         )
 
-    def __get_dataloader(self, dataset: OrdinancesDataset) -> DataLoader:
+    def __get_dataloader(self, dataset: OrdinancesNERDataset) -> DataLoader:
         return DataLoader(
             dataset,
             batch_size=self.batch_size,
@@ -319,7 +315,7 @@ class OrdinancesDataModule(LightningDataModule):
     def train_dataloader(self) -> DataLoader:
         if self.training is None:
             raise ValueError(
-                "Set `load_training=True` when initializing the OrdinancesDataModule."
+                "Set `load_training=True` when initializing the OrdinancesNERDataModule."
             )
         return self.__get_dataloader(self.training)
 
@@ -328,3 +324,38 @@ class OrdinancesDataModule(LightningDataModule):
 
     def eval_dataloader(self) -> DataLoader:
         return self.__get_dataloader(self.evaluation)
+
+
+def load_domain_adaptation(
+    directory: Path,
+    tokenizer: PreTrainedTokenizer,
+    max_length: int,
+    training_filename: str = "training.jsonl",
+    validation_filename: str = "validation.jsonl",
+    evaluation_filename: str = "evaluation.jsonl",
+) -> DatasetDict:
+    # Function that encodes the text data
+    def __encode_batch(batch: Mapping[str, List]) -> Mapping[str, List]:
+        return tokenizer(
+            batch["text"],
+            padding="max_length",
+            truncation=True,
+            max_length=max_length,
+            return_overflowing_tokens=True,
+            return_special_tokens_mask=True,
+        )
+
+    # Loads the full dataset from disk
+    dataset = load_dataset(
+        "json",
+        data_dir=directory,
+        data_files={
+            "training": training_filename,
+            "validation": validation_filename,
+            "evaluation": evaluation_filename,
+        },
+    )
+    # Encodes the batch
+    return dataset.map(
+        __encode_batch, batched=True, remove_columns=dataset["training"].column_names
+    )
