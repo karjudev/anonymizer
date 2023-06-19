@@ -1,11 +1,12 @@
+from abc import abstractmethod
 import os
 from pathlib import Path
-from typing import Iterable, List, Mapping, Optional, Set, Tuple
+from typing import Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import torch
 from heuristics.date import detect_dates
 from log import logger
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, ConcatDataset, random_split
 from lightning.pytorch import LightningDataModule
 import srsly
 from transformers import PreTrainedTokenizer
@@ -200,8 +201,31 @@ class OrdinancesNERDataset(Dataset):
         dataset.read_file(filepath)
         return dataset
 
+    @classmethod
+    def from_files(
+        cls,
+        filepaths: Iterable[Path],
+        binarize: bool,
+        tokenizer: PreTrainedTokenizer,
+        heuristic_dates: bool,
+        discard_labels: Set[str],
+        max_length: int = 512,
+        dates_window: Optional[int] = None,
+    ) -> "OrdinancesNERDataset":
+        dataset = OrdinancesNERDataset(
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            max_length,
+            dates_window,
+        )
+        for filepath in filepaths:
+            dataset.read_file(filepath)
+        return dataset
 
-class OrdinancesNERDataModule(LightningDataModule):
+
+class NERDataModule(LightningDataModule):
     def __init__(
         self,
         directory: Path,
@@ -209,7 +233,6 @@ class OrdinancesNERDataModule(LightningDataModule):
         tokenizer: PreTrainedTokenizer,
         heuristic_dates: bool,
         discard_labels: Set[str],
-        load_training: bool = True,
         dates_window: Optional[int] = None,
         batch_size: int = 16,
         num_gpus: int = 1,
@@ -225,48 +248,8 @@ class OrdinancesNERDataModule(LightningDataModule):
         # Gets padding token
         pad_token = tokenizer.special_tokens_map["pad_token"]
         self.pad_token_id = tokenizer.get_vocab()[pad_token]
-        # Loads training first
-        if load_training:
-            self.training = OrdinancesNERDataset.from_file(
-                directory / training_filename,
-                binarize,
-                tokenizer,
-                heuristic_dates,
-                discard_labels,
-                dates_window=dates_window,
-            )
-        else:
-            self.training = None
-        # Loads tuning and validation
-        self.validation = OrdinancesNERDataset.from_file(
-            directory / validation_filename,
-            binarize,
-            tokenizer,
-            heuristic_dates,
-            discard_labels,
-            dates_window=dates_window,
-        )
-        self.evaluation = OrdinancesNERDataset.from_file(
-            directory / evaluation_filename,
-            binarize,
-            tokenizer,
-            heuristic_dates,
-            discard_labels,
-            dates_window=dates_window,
-        )
-        # Extracts Label to ID mappings
-        self.eval_label2id = self.evaluation.eval_label2id
-        self.training_label2id = self.evaluation.training_label2id
 
-    def num_training_steps(
-        self, epochs: int, fraction: float = 0.01
-    ) -> Tuple[int, int]:
-        num_batches = len(self.training) // (self.batch_size * self.num_gpus)
-        num_total_steps = epochs * num_batches
-        num_warmup_steps = num_total_steps * fraction
-        return num_total_steps, num_warmup_steps
-
-    def __collate_batch(self, batch):
+    def _collate_batch(self, batch):
         batch_ = list(zip(*batch))
         input_ids, attention_mask, heuristics, spans, labels = (
             batch_[0],
@@ -303,14 +286,95 @@ class OrdinancesNERDataModule(LightningDataModule):
             labels_tensor,
         )
 
+    @abstractmethod
+    def training_warmup_steps(
+        self, epochs: int, fraction: float = 0.01
+    ) -> Tuple[int, int]:
+        pass
+
+    @abstractmethod
+    def reset(self) -> None:
+        pass
+
+
+class BatchDataModule(NERDataModule):
+    def __init__(
+        self,
+        directory: Path,
+        binarize: bool,
+        tokenizer: PreTrainedTokenizer,
+        heuristic_dates: bool,
+        discard_labels: Set[str],
+        load_training: bool = True,
+        dates_window: int | None = None,
+        batch_size: int = 16,
+        num_gpus: int = 1,
+        num_workers: int = 8,
+        training_filename: str = "training.jsonl",
+        validation_filename: str = "validation.jsonl",
+        evaluation_filename: str = "evaluation.jsonl",
+    ) -> None:
+        super().__init__(
+            directory,
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            load_training,
+            dates_window,
+            batch_size,
+            num_gpus,
+            num_workers,
+        )
+        # Loads training first
+        if load_training:
+            self.training = OrdinancesNERDataset.from_file(
+                directory / training_filename,
+                binarize,
+                tokenizer,
+                heuristic_dates,
+                discard_labels,
+                dates_window=dates_window,
+            )
+        else:
+            self.training = None
+        # Loads validation and evaluation
+        self.validation = OrdinancesNERDataset.from_file(
+            directory / validation_filename,
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            dates_window=dates_window,
+        )
+        self.evaluation = OrdinancesNERDataset.from_file(
+            directory / evaluation_filename,
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            dates_window=dates_window,
+        )
+        # Extracts Label to ID mappings
+        self.eval_label2id = self.evaluation.eval_label2id
+        self.training_label2id = self.evaluation.training_label2id
+
     def __get_dataloader(self, dataset: OrdinancesNERDataset) -> DataLoader:
         return DataLoader(
             dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            collate_fn=self.__collate_batch,
+            collate_fn=self._collate_batch,
             pin_memory=True,
         )
+
+    def training_warmup_steps(
+        self, epochs: int, fraction: float = 0.01
+    ) -> Tuple[int, int]:
+        num_batches = len(self.training) // (self.batch_size * self.num_gpus)
+        num_total_steps = epochs * num_batches
+        num_warmup_steps = num_total_steps * fraction
+        return num_total_steps, num_warmup_steps
 
     def train_dataloader(self) -> DataLoader:
         if self.training is None:
@@ -324,6 +388,115 @@ class OrdinancesNERDataModule(LightningDataModule):
 
     def eval_dataloader(self) -> DataLoader:
         return self.__get_dataloader(self.evaluation)
+
+    def reset(self) -> None:
+        pass
+
+
+class IncrementalDataModule(NERDataModule):
+    def __init__(
+        self,
+        directory: Path,
+        binarize: bool,
+        tokenizer: PreTrainedTokenizer,
+        heuristic_dates: bool,
+        discard_labels: Set[str],
+        dates_window: int | None = None,
+        batch_size: int = 16,
+        num_gpus: int = 1,
+        num_workers: int = 8,
+        training_filename: str = "training.jsonl",
+        validation_filename: str = "validation.jsonl",
+        evaluation_filename: str = "evaluation.jsonl",
+    ) -> None:
+        super().__init__(
+            directory,
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            dates_window,
+            batch_size,
+            num_gpus,
+            num_workers,
+            training_filename,
+            validation_filename,
+            evaluation_filename,
+        )
+        # Loads the unique training/validation dataset
+        self.dataset = OrdinancesNERDataset.from_files(
+            [directory / training_filename, directory / validation_filename],
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            dates_window=dates_window,
+        )
+        # Loads the validation dataset
+        self.evaluation = OrdinancesNERDataset.from_file(
+            directory / evaluation_filename,
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            dates_window=dates_window,
+        )
+        self.eval_label2id = self.evaluation.eval_label2id
+        self.training_label2id = self.evaluation.training_label2id
+        # Sets the running index in order to select initially only the first batch
+        self.curr = 0
+
+    def training_warmup_steps(
+        self, epochs: int, fraction: float = 0.01
+    ) -> Tuple[int, int]:
+        return 50_000, 0
+
+    def train_dataloader(self) -> DataLoader:
+        # Increments the current counter
+        self.curr += self.batch_size
+        # Selects the newest examples
+        new = self.dataset[self.curr - self.batch_size : self.curr]
+        # Rest of the previous data
+        rest = self.dataset[: self.curr - self.batch_size]
+        # If rest is empty, returns
+        if len(rest) == 0:
+            dataset = new
+        else:
+            # Samples at most `2 * batch_size` old records
+            old_size = min(2 * self.batch_size, len(rest))
+            discard_size = len(rest) - old_size
+            old, _ = random_split(rest, [old_size, discard_size])
+            dataset = ConcatDataset([old, new])
+        # Builds the dataloader
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.batch_size,
+            collate_fn=self._collate_batch,
+        )
+
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.dataset[: self.curr],
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=self._collate_batch,
+        )
+
+    def eval_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.evaluation,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=self._collate_batch,
+            pin_memory=True,
+        )
+
+    def reset(self) -> None:
+        self.curr = 0
 
 
 def load_domain_adaptation(

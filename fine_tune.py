@@ -5,7 +5,7 @@ import typer
 
 from utils.utils import (
     get_reader,
-    train_model,
+    train_batch,
     save_model,
     get_tagset,
     load_model,
@@ -39,7 +39,7 @@ def main(
     )
     model.train_data = train_data
 
-    trainer = train_model(model=model, out_dir=out_dir_path, epochs=epochs)
+    trainer = train_batch(model=model, out_dir=out_dir_path, epochs=epochs)
 
     # use pytorch lightnings saver here.
     out_model_path = save_model(

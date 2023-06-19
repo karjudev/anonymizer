@@ -1,13 +1,13 @@
 import os
 from pathlib import Path
 import time
-from typing import Any, Mapping, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 from lightning.pytorch import seed_everything, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 import optuna
 from optuna.pruners import MedianPruner
-from data.ordinances import OrdinancesNERDataModule
+from data.ordinances import BatchDataModule, IncrementalDataModule, NERDataModule
 
 from log import logger
 from model.callbacks import PyTorchLightningPruningCallback
@@ -72,38 +72,79 @@ def save_model(trainer, out_dir, model_name="", timestamp=None):
 
 def train_model(
     model: NERBaseAnnotator,
-    datamodule: OrdinancesNERDataModule,
+    datamodule: NERDataModule,
     epochs: int,
     out_dir: Path,
     grad_norm: float,
-    metric: str = "val_MD@F1",
-) -> Trainer:
+    reload_every_epoch: bool,
+    es_callback: Optional[EarlyStopping] = None,
+):
     seed_everything(42)
-    es_callback = EarlyStopping(
-        monitor=metric, min_delta=0.001, patience=3, verbose=True, mode="max"
-    )
-    lr_logger = LearningRateMonitor(logging_interval="step")
+    callbacks = [LearningRateMonitor(logging_interval="step")]
+    if es_callback is not None:
+        callbacks.append(es_callback)
     trainer = Trainer(
         max_epochs=epochs,
         default_root_dir=out_dir,
-        callbacks=[es_callback, lr_logger],
+        callbacks=callbacks,
         gradient_clip_algorithm="norm",
         gradient_clip_val=grad_norm,
+        reload_dataloaders_every_n_epochs=1 if reload_every_epoch else 0,
     )
     trainer.fit(model, datamodule=datamodule)
     return trainer
 
 
+def train_batch(
+    model: NERBaseAnnotator,
+    datamodule: BatchDataModule,
+    epochs: int,
+    out_dir: Path,
+    grad_norm: float,
+    metric: str = "val_MD@F1",
+) -> Trainer:
+    es_callback = EarlyStopping(
+        monitor=metric, min_delta=0.001, patience=3, verbose=True, mode="max"
+    )
+    return train_model(
+        model,
+        datamodule,
+        epochs,
+        out_dir,
+        grad_norm,
+        reload_every_epoch=False,
+        es_callback=es_callback,
+    )
+
+
+def train_incremental(
+    model: NERBaseAnnotator,
+    datamodule: IncrementalDataModule,
+    epochs: int,
+    out_dir: Path,
+    grad_norm: float,
+) -> Trainer:
+    return train_model(
+        model,
+        datamodule,
+        epochs,
+        out_dir,
+        grad_norm,
+        reload_every_epoch=True,
+    )
+
+
 def tune_model(
-    datamodule: OrdinancesNERDataModule,
+    datamodule: NERDataModule,
     encoder_model: str,
     epochs: int,
-    n_trials: int = 10,
-    metric: str = "val_MD@F1",
+    n_trials: int,
+    incremental: bool,
+    metric: str,
 ) -> Tuple[float, Mapping[str, Any]]:
     seed_everything(42)
     # Number of training and warm-up steps
-    num_training_steps, num_warmup_steps = datamodule.num_training_steps(epochs)
+    num_training_steps, num_warmup_steps = datamodule.training_warmup_steps(epochs)
 
     def objective(trial: optuna.Trial):
         # Extracts hyperparameters
@@ -132,15 +173,25 @@ def tune_model(
         # Creates the trainer
         pruning_callback = PyTorchLightningPruningCallback(trial, monitor=metric)
         lr_logger = LearningRateMonitor(logging_interval="step")
+        # Distinguishes between incremental and batch training
+        if incremental:
+            log_every_n_steps = datamodule.batch_size
+            reload_dataloaders_every_n_epochs = 1
+        else:
+            log_every_n_steps = 50
+            reload_dataloaders_every_n_epochs = 0
         trainer = Trainer(
             max_epochs=epochs,
             enable_checkpointing=False,
             callbacks=[pruning_callback, lr_logger],
             gradient_clip_algorithm="norm",
             gradient_clip_val=grad_norm,
+            log_every_n_steps=log_every_n_steps,
+            reload_dataloaders_every_n_epochs=reload_dataloaders_every_n_epochs,
         )
         trainer.logger.log_hyperparams(hyperparameters)
         # Fits the model
+        datamodule.reset()
         trainer.fit(model, datamodule=datamodule)
         # Returns the best metric
         return trainer.logged_metrics[metric].item()
@@ -148,6 +199,40 @@ def tune_model(
     study = optuna.create_study(direction="maximize", pruner=MedianPruner())
     study.optimize(objective, n_trials=n_trials)
     return study.best_value, study.best_params
+
+
+def tune_batch(
+    datamodule: BatchDataModule,
+    encoder_model: str,
+    epochs: int,
+    n_trials: int = 10,
+    metric: str = "val_MD@F1",
+) -> Tuple[float, Mapping[str, Any]]:
+    return tune_model(
+        datamodule,
+        encoder_model,
+        epochs,
+        n_trials=n_trials,
+        incremental=False,
+        metric=metric,
+    )
+
+
+def tune_incremental(
+    datamodule: BatchDataModule,
+    encoder_model: str,
+    epochs: int = 16,
+    n_trials: int = 10,
+    metric: str = "MD@F1",
+) -> Tuple[float, Mapping[str, Any]]:
+    return tune_model(
+        datamodule,
+        encoder_model,
+        epochs,
+        n_trials=n_trials,
+        incremental=True,
+        metric=metric,
+    )
 
 
 def get_models_for_evaluation(path):
