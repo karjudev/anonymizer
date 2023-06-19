@@ -4,6 +4,9 @@ from typing import Iterator, List, Mapping
 import typer
 import srsly
 from sklearn.model_selection import train_test_split
+import spacy
+from spacy import Language
+from spacy.tokens import DocBin, Span
 
 
 app = typer.Typer()
@@ -102,6 +105,34 @@ def clean(
     input_stream = srsly.read_jsonl(in_filepath)
     output_stream = clean_records(input_stream, strip_alphanum, merge_contiguous)
     srsly.write_jsonl(out_filepath, output_stream)
+
+
+def jsonl_to_spacy(filepath: Path, nlp: Language) -> DocBin:
+    doc_bin = DocBin()
+    for record in srsly.read_jsonl(filepath):
+        doc = nlp(record["text"])
+        ents = []
+        for ent in record["entities"]:
+            span = doc.char_span(
+                start_idx=ent["start"], end_idx=ent["end"], label=ent["label"]
+            )
+            if span is not None:
+                ents.append(span)
+        doc.set_ents(ents)
+        doc_bin.add(doc)
+    return doc_bin
+
+
+@app.command()
+def to_spacy(
+    in_directory: Path, out_directory: Path, model: str = "it_core_news_lg"
+) -> None:
+    assert in_directory.is_dir()
+    os.makedirs(out_directory, exist_ok=True)
+    nlp: Language = spacy.load(model, exclude=["ner"])
+    for split in ["training", "validation", "evaluation"]:
+        doc_bin = jsonl_to_spacy(in_directory / (split + ".jsonl"), nlp)
+        doc_bin.to_disk(out_directory / (split + ".spacy"))
 
 
 if __name__ == "__main__":
