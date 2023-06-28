@@ -39,7 +39,7 @@ def split(
     srsly.write_jsonl(directory / evaluation_filename, eval)
 
 
-def _can_merge(
+def __can_merge(
     first: Mapping[str, int | str], second: Mapping[str, int | str], text: str
 ) -> bool:
     if first["label"] != second["label"]:
@@ -48,12 +48,14 @@ def _can_merge(
     return text[left:right].isspace()
 
 
-def merge_contiguous_spans(record: Mapping[str, int | str]) -> Mapping[str, int | str]:
+def __merge_contiguous_spans(
+    record: Mapping[str, int | str]
+) -> Mapping[str, int | str]:
     text = record["text"]
     spans = sorted(record["entities"], key=lambda span: span["start"])
     merged_spans = []
     for span in spans:
-        if len(merged_spans) == 0 or not _can_merge(merged_spans[-1], span, text):
+        if len(merged_spans) == 0 or not __can_merge(merged_spans[-1], span, text):
             merged_spans.append(span)
         else:
             merged_spans[-1]["end"] = span["end"]
@@ -62,7 +64,7 @@ def merge_contiguous_spans(record: Mapping[str, int | str]) -> Mapping[str, int 
     return record
 
 
-def strip_alphanumeric_spans(
+def __strip_alphanumeric_spans(
     record: Mapping[str, int | str]
 ) -> Mapping[str, int | str]:
     text = record["text"]
@@ -83,14 +85,14 @@ def strip_alphanumeric_spans(
     return record
 
 
-def clean_records(
+def __clean_records(
     records: List[Mapping[str, int | str]], strip_alphanum: bool, merge_contiguous: bool
 ) -> Iterator[Mapping[str, int | str]]:
     for record in records:
         if strip_alphanum:
-            record = strip_alphanumeric_spans(record)
+            record = __strip_alphanumeric_spans(record)
         if merge_contiguous:
-            record = merge_contiguous_spans(record)
+            record = __merge_contiguous_spans(record)
         yield record
 
 
@@ -103,18 +105,19 @@ def clean(
 ) -> None:
     assert str(in_filepath.absolute()) != str(out_filepath.absolute())
     input_stream = srsly.read_jsonl(in_filepath)
-    output_stream = clean_records(input_stream, strip_alphanum, merge_contiguous)
+    output_stream = __clean_records(input_stream, strip_alphanum, merge_contiguous)
     srsly.write_jsonl(out_filepath, output_stream)
 
 
-def jsonl_to_spacy(filepath: Path, nlp: Language) -> DocBin:
+def __jsonl_to_spacy(filepath: Path, nlp: Language, binarize: bool) -> DocBin:
     doc_bin = DocBin()
     for record in srsly.read_jsonl(filepath):
         doc = nlp(record["text"])
         ents = []
         for ent in record["entities"]:
+            label = "OMISSIS" if binarize else ent["label"]
             span = doc.char_span(
-                start_idx=ent["start"], end_idx=ent["end"], label=ent["label"]
+                start_idx=ent["start"], end_idx=ent["end"], label=label
             )
             if span is not None:
                 ents.append(span)
@@ -125,13 +128,16 @@ def jsonl_to_spacy(filepath: Path, nlp: Language) -> DocBin:
 
 @app.command()
 def to_spacy(
-    in_directory: Path, out_directory: Path, model: str = "it_core_news_lg"
+    in_directory: Path,
+    out_directory: Path,
+    model: str = "it_core_news_lg",
+    binarize: bool = False,
 ) -> None:
     assert in_directory.is_dir()
     os.makedirs(out_directory, exist_ok=True)
     nlp: Language = spacy.load(model, exclude=["ner"])
     for split in ["training", "validation", "evaluation"]:
-        doc_bin = jsonl_to_spacy(in_directory / (split + ".jsonl"), nlp)
+        doc_bin = __jsonl_to_spacy(in_directory / (split + ".jsonl"), nlp, binarize)
         doc_bin.to_disk(out_directory / (split + ".spacy"))
 
 

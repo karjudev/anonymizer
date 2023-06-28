@@ -1,7 +1,8 @@
 from abc import abstractmethod
 import os
 from pathlib import Path
-from typing import Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Iterable, List, Mapping, Optional, Set, Tuple
+from lightning.pytorch.utilities.types import TRAIN_DATALOADERS
 
 import torch
 from heuristics.date import detect_dates
@@ -293,6 +294,10 @@ class NERDataModule(LightningDataModule):
         pass
 
     @abstractmethod
+    def eval_dataloader(self) -> DataLoader:
+        pass
+
+    @abstractmethod
     def reset(self) -> None:
         pass
 
@@ -443,13 +448,125 @@ class IncrementalDataModule(NERDataModule):
         )
         self.eval_label2id = self.evaluation.eval_label2id
         self.training_label2id = self.evaluation.training_label2id
-        # Sets the running index in order to select initially only the first batch
         self.curr = 0
 
     def training_warmup_steps(
         self, epochs: int, fraction: float = 0.01
     ) -> Tuple[int, int]:
         return 50_000, 0
+
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.dataset[: self.curr],
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=self._collate_batch,
+        )
+
+    def eval_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.evaluation,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=self._collate_batch,
+            pin_memory=True,
+        )
+
+    def reset(self) -> None:
+        self.curr = 0
+
+
+class WindowDataModule(IncrementalDataModule):
+    def __init__(
+        self,
+        directory: Path,
+        binarize: bool,
+        tokenizer: PreTrainedTokenizer,
+        heuristic_dates: bool,
+        discard_labels: Set[str],
+        dates_window: int | None = None,
+        batch_size: int = 16,
+        num_gpus: int = 1,
+        num_workers: int = 8,
+        training_filename: str = "training.jsonl",
+        validation_filename: str = "validation.jsonl",
+        evaluation_filename: str = "evaluation.jsonl",
+    ) -> None:
+        super().__init__(
+            directory,
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            dates_window,
+            batch_size,
+            num_gpus,
+            num_workers,
+            training_filename,
+            validation_filename,
+            evaluation_filename,
+        )
+        self.curr = 0
+
+    def train_dataloader(self) -> DataLoader:
+        # Increments the current counter
+        self.curr += self.batch_size
+        # Selects the newest examples
+        new = self.dataset[self.curr - self.batch_size : self.curr]
+        # Rest of the previous data
+        rest = self.dataset[: self.curr - self.batch_size]
+        # If rest is empty, returns
+        if len(rest) == 0:
+            dataset = new
+        else:
+            # Samples at most `2 * batch_size` old records
+            old_size = min(2 * self.batch_size, len(rest))
+            old = rest[-old_size:]
+            dataset = ConcatDataset([old, new])
+        # Builds the dataloader
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.batch_size,
+            collate_fn=self._collate_batch,
+        )
+
+
+class RandomDataModule(IncrementalDataModule):
+    def __init__(
+        self,
+        directory: Path,
+        binarize: bool,
+        tokenizer: PreTrainedTokenizer,
+        heuristic_dates: bool,
+        discard_labels: Set[str],
+        dates_window: int | None = None,
+        batch_size: int = 16,
+        num_gpus: int = 1,
+        num_workers: int = 8,
+        training_filename: str = "training.jsonl",
+        validation_filename: str = "validation.jsonl",
+        evaluation_filename: str = "evaluation.jsonl",
+    ) -> None:
+        super().__init__(
+            directory,
+            binarize,
+            tokenizer,
+            heuristic_dates,
+            discard_labels,
+            dates_window,
+            batch_size,
+            num_gpus,
+            num_workers,
+            training_filename,
+            validation_filename,
+            evaluation_filename,
+        )
+        # Sets the running index in order to select initially only the first batch
+        self.curr = 0
 
     def train_dataloader(self) -> DataLoader:
         # Increments the current counter
@@ -492,11 +609,7 @@ class IncrementalDataModule(NERDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             collate_fn=self._collate_batch,
-            pin_memory=True,
         )
-
-    def reset(self) -> None:
-        self.curr = 0
 
 
 def load_domain_adaptation(
