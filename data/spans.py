@@ -25,17 +25,6 @@ def get_label2id(binarize: bool) -> Mapping[str, int]:
     return BINARIZED_LABEL2ID if binarize else MULTICLASS_LABEL2ID
 
 
-def discard_label2id(
-    label2id: Mapping[str, int], discard_labels: Set[str] = None
-) -> Mapping[str, int]:
-    return {
-        label: idx
-        for idx, label in enumerate(
-            key for key in label2id.keys() if key[2:] not in discard_labels
-        )
-    }
-
-
 def prodigy_to_labels(
     spans: List[Mapping[str, int | str]],
     offsets: List[Tuple[int, int]],
@@ -107,13 +96,3 @@ def extract_spans(labels: List[int], id2label: Mapping[int, str]):
             pass
     _save_span(cur_tag, cur_start, _id + 1, gold_spans)
     return gold_spans
-
-
-def merge_labels(first: List[int], second: List[int], out_idx: int) -> List[int]:
-    label_ids = []
-    for a, b in zip(first, second):
-        if b != out_idx:
-            label_ids.append(b)
-        else:
-            label_ids.append(a)
-    return label_ids

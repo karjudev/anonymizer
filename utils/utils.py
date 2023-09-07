@@ -7,10 +7,9 @@ from lightning.pytorch import seed_everything, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 import optuna
 from optuna.pruners import MedianPruner
-from data.ordinances import BatchDataModule, IncrementalDataModule, NERDataModule
+from data.ordinances import BatchDataModule, NERDataModule
 
 from log import logger
-from model.callbacks import PyTorchLightningPruningCallback
 from model.ner_model import NERBaseAnnotator
 
 
@@ -34,31 +33,21 @@ def write_eval_performance(eval_performance, out_file):
     logger.info("Finished writing evaluation performance for {}".format(out_file))
 
 
-def load_model(
-    model_file: str,
-    eval_label2id: Mapping[str, int],
-    training_label2id: Mapping[str, int],
-    stage="prediction",
-):
+def load_model(model_file: str, label2id: Mapping[str, int], stage="prediction"):
     if ~os.path.isfile(model_file):
         model_file = get_models_for_evaluation(model_file)
 
     hparams_file = model_file[: model_file.rindex("checkpoints/")] + "/hparams.yaml"
     model = NERBaseAnnotator.load_from_checkpoint(
-        model_file,
-        hparams_file=hparams_file,
-        eval_label2id=eval_label2id,
-        training_label2id=training_label2id,
-        stage=stage,
+        model_file, hparams_file=hparams_file, label2id=label2id, stage=stage
     )
     model.stage = stage
     return model, model_file
 
 
 def save_model(trainer, out_dir, model_name="", timestamp=None):
-    out_dir = out_dir / (
-        "lightning_logs/version_" + str(trainer.logger.version) + "/checkpoints/"
-    )
+    version = trainer.logger.version if trainer.logger else 0
+    out_dir = out_dir / ("lightning_logs/version_" + str(version) + "/checkpoints/")
     if timestamp is None:
         timestamp = time.time()
     os.makedirs(out_dir, exist_ok=True)
@@ -114,124 +103,6 @@ def train_batch(
         grad_norm,
         reload_every_epoch=False,
         es_callback=es_callback,
-    )
-
-
-def train_incremental(
-    model: NERBaseAnnotator,
-    datamodule: IncrementalDataModule,
-    epochs: int,
-    out_dir: Path,
-    grad_norm: float,
-) -> Trainer:
-    return train_model(
-        model,
-        datamodule,
-        epochs,
-        out_dir,
-        grad_norm,
-        reload_every_epoch=True,
-    )
-
-
-def tune_model(
-    datamodule: NERDataModule,
-    encoder_model: str,
-    epochs: int,
-    n_trials: int,
-    incremental: bool,
-    metric: str,
-) -> Tuple[float, Mapping[str, Any]]:
-    seed_everything(42)
-    # Number of training and warm-up steps
-    num_training_steps, num_warmup_steps = datamodule.training_warmup_steps(epochs)
-
-    def objective(trial: optuna.Trial):
-        # Extracts hyperparameters
-        lr = trial.suggest_float("lr", low=1e-5, high=5e-4)
-        weight_decay = trial.suggest_float("weight_decay", low=0.001, high=0.01)
-        dropout_rate = trial.suggest_float("dropout_rate", low=0.01, high=0.1)
-        grad_norm = trial.suggest_float("grad_norm", low=1.0, high=5.0)
-        hyperparameters = {
-            "lr": lr,
-            "weight_decay": weight_decay,
-            "dropout_rate": dropout_rate,
-            "grad_norm": grad_norm,
-        }
-        # Creates the model
-        model = NERBaseAnnotator(
-            encoder_model=encoder_model,
-            eval_label2id=datamodule.eval_label2id,
-            training_label2id=datamodule.training_label2id,
-            lr=lr,
-            num_training_steps=num_training_steps,
-            num_warmup_steps=num_warmup_steps,
-            dropout_rate=dropout_rate,
-            weight_decay=weight_decay,
-            stage="tuning",
-        )
-        # Creates the trainer
-        pruning_callback = PyTorchLightningPruningCallback(trial, monitor=metric)
-        lr_logger = LearningRateMonitor(logging_interval="step")
-        # Distinguishes between incremental and batch training
-        if incremental:
-            log_every_n_steps = datamodule.batch_size
-            reload_dataloaders_every_n_epochs = 1
-        else:
-            log_every_n_steps = 50
-            reload_dataloaders_every_n_epochs = 0
-        trainer = Trainer(
-            max_epochs=epochs,
-            enable_checkpointing=False,
-            callbacks=[pruning_callback, lr_logger],
-            gradient_clip_algorithm="norm",
-            gradient_clip_val=grad_norm,
-            log_every_n_steps=log_every_n_steps,
-            reload_dataloaders_every_n_epochs=reload_dataloaders_every_n_epochs,
-        )
-        trainer.logger.log_hyperparams(hyperparameters)
-        # Fits the model
-        datamodule.reset()
-        trainer.fit(model, datamodule=datamodule)
-        # Returns the best metric
-        return trainer.logged_metrics[metric].item()
-
-    study = optuna.create_study(direction="maximize", pruner=MedianPruner())
-    study.optimize(objective, n_trials=n_trials)
-    return study.best_value, study.best_params
-
-
-def tune_batch(
-    datamodule: BatchDataModule,
-    encoder_model: str,
-    epochs: int,
-    n_trials: int = 10,
-    metric: str = "val_MD@F1",
-) -> Tuple[float, Mapping[str, Any]]:
-    return tune_model(
-        datamodule,
-        encoder_model,
-        epochs,
-        n_trials=n_trials,
-        incremental=False,
-        metric=metric,
-    )
-
-
-def tune_incremental(
-    datamodule: BatchDataModule,
-    encoder_model: str,
-    epochs: int = 16,
-    n_trials: int = 10,
-    metric: str = "MD@F1",
-) -> Tuple[float, Mapping[str, Any]]:
-    return tune_model(
-        datamodule,
-        encoder_model,
-        epochs,
-        n_trials=n_trials,
-        incremental=True,
-        metric=metric,
     )
 
 
